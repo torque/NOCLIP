@@ -1,0 +1,59 @@
+== nearly obvious command line interface parser
+
+A zig library for composing declarative command-line interfaces. Heavily
+inspired by https://click.palletsprojects.com/[click] for Python.
+
+== Extemporaneous Bloviation
+
+[quote, George "Albert Einstein" Washington]
+____
+The alarm rings, and expletives spill from my mouth—instinctively, before any
+neuron has a chance to fire. You'd think this would get easier, having done it
+at least 12000 times, but I guess it just goes to show that practice does not
+necessarily converge on perfection, no matter what infinite limit t approaches.
+Eyes clamped shut against the encroaching underglow spilling from the curtains,
+I stretch my arms straight out from my sides and proceed to lose my balance,
+flying horizontally off of the mattress. An attempt at attitude control fails
+vigorously and I begin cartwheeling through open space, asserting a lopsided
+trajectory that intersects with the roof of the house. Passing through it
+unencumbered, I careen skyward and watch the ground recede into the distance,
+as the features of the landscape shrink and pop out of existence.
+____
+
+== Hello
+
+Requires Zig `0.10.0` or maybe better. Uses stage2-only features.
+
+=== Features
+
+* short- (`-s`) and long- (`--long`) style options
+* short options can be chained (e.g. `-abc` is the same as `-a -b -c`)
+* conventional `--` to force early of argument parsing
+* option values are deserialized into rich types using conversion callback functions
+* can specify default values for options that may be omitted
+* options can be bound to load from environmental variables if not specified directly
+* nested subcommands (e.g. for `git`-style CLIs (`command subcommand subsubcommand`))
+
+=== Planned
+
+* help text generation
+* better error reporting
+* better build system
+
+=== Under consideration
+
+* multi-value option flags
+* shell completion integration
+* `--long=value` style of value specification
+* Is it actually possible for a published written document to truly be
+extemporaneous?
+
+=== Use
+
+`zig build demo` for a demo. Otherwise just copy the file or use a submodule or
+something.
+
+== LICENSE
+
+INTERNET SOFTWARE CONSORTIUM LICENSE
+
