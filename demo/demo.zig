@@ -1,60 +1,42 @@
 const std = @import("std");
 const noclip = @import("noclip");
 
-const subData: noclip.CommandData = .{ .name = "subcommand", .help = "this a sub command\n" };
+const context: []const u8 = "hello friend";
+const ContextType = @TypeOf(context);
 
-const subFlag = noclip.StringOption{
-    .name = "meta",
-    .short = "-m",
-    .handler = noclip.passthrough,
-};
-const subArg = noclip.StringArg{
-    .name = "sub",
-    .handler = noclip.passthrough,
-};
-const subSpec = .{ subFlag, subArg };
-const subCommand = noclip.Command(subData, subSpec, void, subCallback);
+const helpFlag = noclip.HelpFlag(.{ .UserContext = ContextType });
 
-const cdata: noclip.CommandData = .{
-    .name = "main",
-    .help = "main CLI entry point\n",
-};
-const flagCheck = noclip.FlagOption{
+const subData: noclip.CommandData = .{ .name = "subcommand", .help = "this a sub command" };
+const subFlag: noclip.StringOption(ContextType) = .{ .name = "meta", .short = "-m" };
+const subArg: noclip.StringArg(ContextType) = .{ .name = "sub" };
+const subSpec = .{ helpFlag, subFlag, subArg };
+const subCommand: noclip.CommandParser(subData, subSpec, ContextType, subCallback) = .{};
+
+fn wrecker(zontext: ContextType, input: []const u8) ![]const u8 {
+    std.debug.print("ctx: {s}\n", .{zontext});
+    return input;
+}
+
+const cdata: noclip.CommandData = .{ .name = "main", .help = "main CLI entry point" };
+const flagCheck: noclip.FlagOption(ContextType) = .{
     .name = "flag",
-    .default = .{ .value = false },
     .truthy = .{ .short = "-f", .long = "--flag" },
     .falsy = .{ .long = "--no-flag" },
 };
-const inputOption = noclip.StringOption{
+const inputOption: noclip.StringOption(ContextType) = .{
     .name = "input",
     .short = "-i",
     .long = "--input",
+    .handler = wrecker,
     .envVar = "OPTS_INPUT",
-    .handler = noclip.passthrough,
 };
-const outputOption = noclip.StringOption{
-    .name = "output",
-    .long = "--output",
-    .default = .{ .value = "waoh" },
-    .handler = noclip.passthrough,
-};
-const numberOption = noclip.ValuedOption(i32){
-    .name = "number",
-    .short = "-n",
-    .long = "--number",
-    .handler = noclip.intHandler(i32),
-};
-const argCheck = noclip.StringArg{
-    .name = "argument",
-    .handler = noclip.passthrough,
-};
-const argAgain = noclip.StringArg{
-    .name = "another",
-    .handler = noclip.passthrough,
-};
+const outputOption: noclip.StringOption(ContextType) = .{ .name = "output", .long = "--output", .default = "waoh" };
+const numberOption: noclip.ValuedOption(.{ .Output = i32, .UserContext = ContextType }) = .{ .name = "number", .short = "-n", .long = "--number" };
+const argCheck: noclip.StringArg(ContextType) = .{ .name = "argument" };
+const argAgain: noclip.StringArg(ContextType) = .{ .name = "another", .default = "nope" };
 
 const mainSpec = .{
-    noclip.defaultHelpFlag,
+    helpFlag,
     flagCheck,
     inputOption,
     outputOption,
@@ -64,14 +46,14 @@ const mainSpec = .{
     subCommand,
 };
 
-pub fn subCallback(_: void, result: noclip.CommandResult(subSpec)) !void {
-    std.debug.print("subcommand {}!!!\n", .{result});
+pub fn subCallback(_: ContextType, result: noclip.CommandResult(subSpec, ContextType)) !void {
+    std.debug.print("subcommand {any}!!!\n", .{result});
 }
 
-pub fn mainCommand(_: void, result: noclip.CommandResult(mainSpec)) !void {
+pub fn mainCommand(_: ContextType, result: noclip.CommandResult(mainSpec, ContextType)) !void {
     std.debug.print(
         \\arguments: {{
-        \\    .flag = {}
+        \\    .flag = {any}
         \\    .input = {s}
         \\    .output = {s}
         \\    .number = {d}
@@ -92,7 +74,7 @@ pub fn mainCommand(_: void, result: noclip.CommandResult(mainSpec)) !void {
 }
 
 pub fn main() !void {
-    const command = noclip.Command(cdata, mainSpec, void, mainCommand);
+    var command: noclip.CommandParser(cdata, mainSpec, ContextType, mainCommand) = .{};
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -101,5 +83,5 @@ pub fn main() !void {
     var argit = try std.process.argsWithAllocator(allocator);
     _ = argit.next();
 
-    try command.execute(allocator, std.process.ArgIterator, &argit, {});
+    try command.execute(allocator, std.process.ArgIterator, &argit, context);
 }

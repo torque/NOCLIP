@@ -14,6 +14,8 @@
 
 const std = @import("std");
 const StructField = std.builtin.Type.StructField;
+pub const meta = @import("./meta.zig");
+pub const handlers = @import("./handlers.zig");
 
 const Brand = enum {
     Option,
@@ -21,34 +23,6 @@ const Brand = enum {
     Argument,
     Command,
 };
-
-pub fn noopHandleGen(comptime ResultType: type) *const fn (buf: []const u8) anyerror!ResultType {
-    return struct {
-        pub fn handler(input: []const u8) anyerror!ResultType {
-            return input;
-        }
-    }.handler;
-}
-
-pub const noopHandler = noopHandleGen([]const u8);
-pub const passthrough = noopHandler;
-const noOptHandler = noopHandleGen(?[]const u8);
-
-pub fn intHandler(comptime intType: type) *const fn (buf: []const u8) std.fmt.ParseIntError!intType {
-    return struct {
-        pub fn handler(buf: []const u8) std.fmt.ParseIntError!intType {
-            return try std.fmt.parseInt(intType, buf, 0);
-        }
-    }.handler;
-}
-
-pub fn intRadixHandler(comptime intType: type, radix: u8) *const fn (buf: []const u8) std.fmt.ParseIntError!intType {
-    return struct {
-        pub fn handler(buf: []const u8) std.fmt.ParseIntError!intType {
-            return try std.fmt.parseInt(intType, buf, radix);
-        }
-    }.handler;
-}
 
 pub const OptionError = error{
     BadShortOption,
@@ -59,102 +33,111 @@ pub const OptionError = error{
     ExtraArguments,
 };
 
-pub const ArgCountCategory = enum {
-    None,
-    Some,
-    Many,
-};
-
-pub const ArgCount = union(ArgCountCategory) {
+pub const ArgCount = union(enum) {
+    // TODO: how is this different than .Some = 0?
     None: void,
     Some: u32,
+    // TODO: how is this meaningfully different than .Some =  2 ** 32 - 1? (it
+    // is unlikely anyone would specify 4 billion arguments on the command line,
+    // or that the command line would tolerate such a thing particularly well)
     Many: void,
 };
 
-pub fn ValuedOption(comptime resultType: type) type {
-    return struct {
-        pub fn brand(_: @This()) Brand {
-            return .Option;
-        }
+pub const ParameterArgs = struct {
+    Output: type,
+    UserContext: type,
+};
+
+pub fn ValuedOption(comptime args: ParameterArgs) type {
+    // We use a combination of the resultType and default value to decide if an
+    // option must be provided to the command line. The default is specified
+    // when the type is constructed, so we cannot definitively decide it here.
+    // It can be checked (along with the handler function) when constructing
+    // the CommandResult type and thus be reasonably compile-time checked.
+
+    comptime var result = struct {
+        pub const brand: Brand = .Option;
+        pub const mayBeOptional: bool = switch (@typeInfo(args.Output)) {
+            .Optional => true,
+            else => false,
+        };
+        pub const ResultType: type = args.Output;
+        pub const ContextType: type = args.UserContext;
 
         name: []const u8,
-        // this fake optional is a workaround for a bug in the stage1 compiler
-        // (it doesn't handle nested optionals in struct fields correctly) and
-        // should be replaced with proper optionals as soon as stage2 is
-        // functional.
-        default: union(enum) { none: void, value: resultType } = .none,
-        // this is a combination conversion/validation callback.
-        // Should we try to pass a user context? Zig's bound functions
-        // don't seem to coerce nicely to this type, probably because
-        // they're no longer just a pointer. Any nontrivial type may need an
-        // allocator context passed.
-        handler: *const fn (input: []const u8) anyerror!resultType,
+        // Should this be unconditionally made an optional type? Adding an extra
+        // layer of optional here doesn't seem to give us any advantage that I
+        // can think of. An argument is optional if either mayBeOptional is true
+        // or default is not null.
+        default: (if (mayBeOptional) args.Output else ?args.Output) = null,
+        // this is optional so that null can be provided as a default if there's
+        // not a sane default handler that can be selected (or generated). The
+        // handler can never actually be null, so we'll check for that when
+        // creating CommandResult and cause a compileError there if the handler
+        // is null. That will allow us to force unwrap these safely in the
+        // parsing funcion.
+        handler: ?handlers.HandlerType(args) = handlers.getDefaultHandler(args),
         short: ?*const [2]u8 = null,
         long: ?[]const u8 = null,
         help: ?[]const u8 = null,
 
         envVar: ?[]const u8 = null,
         hideResult: bool = false,
-        eager: bool = false,
 
+        // TODO: for ArgCount.Some > 1 semantics: automatically wrap args.Output
+        // in an array? Eliminates the need for an allocator, but precludes
+        // memory management techniques that may be better.
         args: ArgCount = .{ .Some = 1 },
 
-        pub fn ResultType(comptime _: @This()) type {
-            return resultType;
-        }
-
-        pub fn required(self: @This()) bool {
-            return self.default == .none;
+        fn required(self: @This()) bool {
+            return !@TypeOf(self).mayBeOptional and self.default == null;
         }
     };
+
+    return result;
 }
 
-pub const StringOption = ValuedOption([]const u8);
+pub fn StringOption(comptime UserContext: type) type {
+    return ValuedOption(.{ .Output = []const u8, .UserContext = UserContext });
+}
 
 // this could be ValuedOption(bool) except it allows truthy/falsy flag variants
-// and it doesn't want to parse a value. It could be lowered into a pair of
-// ValuedOption(bool) though, if consuming a value became optional.
+// and it doesn't want to parse a value. with some contortions, it could be
+// lowered into a pair of ValuedOption(bool), if we allowed multiple different
+// arguments to specify the same output field name.
 
 const ShortLong = struct {
     short: ?*const [2]u8 = null,
     long: ?[]const u8 = null,
 };
 
-pub const FlagOption = struct {
-    pub fn brand(_: @This()) Brand {
-        return .Flag;
-    }
+// Flags don't have a conversion callback,
+pub fn FlagOption(comptime UserContext: type) type {
+    return struct {
+        pub const brand: Brand = .Flag;
+        // TODO: it may in some cases be useful to distinguish if the flag has been
+        // entirely unspecified, but I can't think of any right now.
+        pub const ResultType: type = bool;
+        pub const ContextType: type = UserContext;
 
-    name: []const u8,
-    default: union(enum) { none: void, value: bool } = .{ .value = false },
-    truthy: ShortLong = .{},
-    falsy: ShortLong = .{},
-    help: ?[]const u8 = null,
-    // should envVar be split into truthy/falsy the way the args are? otherwise
-    // we probably need to peek the value of the environmental variable to see
-    // if it is truthy or falsy. Honestly, looking at the value is probably
-    // required to avoid violating the principle of least astonishment because
-    // otherwise you can get `MY_VAR=false` causing `true` to be emitted, which
-    // looks and feels bad. But then we need to establish a truthiness baseline.
-    // case insensitive true/false is easy. What about yes/no? 0/1 (or nonzero).
-    // How about empty strings? I'd base on how it reads, and `MY_VAR= prog`
-    // reads falsy to me.
-    envVar: ?[]const u8 = null,
-    hideResult: bool = false,
-    eager: ?*const fn (cmd: CommandData) anyerror!void = null,
+        name: []const u8,
+        default: bool = false,
+        truthy: ShortLong = .{},
+        falsy: ShortLong = .{},
+        help: ?[]const u8 = null,
+        envVar: ?[]const u8 = null,
+        hideResult: bool = false,
+        eager: ?*const fn (UserContext, CommandData) anyerror!void = null,
+    };
+}
 
-    pub fn ResultType(comptime _: @This()) type {
-        return bool;
-    }
-
-    pub fn required(self: @This()) bool {
-        return self.default == .none;
-    }
-};
-
-pub fn produceHelp(cmd: CommandData) !void {
-    std.debug.print("{s}", .{cmd.help});
-    std.process.exit(0);
+pub fn produceHelp(comptime UserContext: type) *const fn (UserContext, CommandData) anyerror!void {
+    return struct {
+        pub fn handler(_: UserContext, data: CommandData) !void {
+            std.debug.print("{s}\n", .{data.help});
+            std.process.exit(0);
+        }
+    }.handler;
 }
 
 // I haven't really figured out a way not to special case the help flag.
@@ -169,49 +152,59 @@ const HelpFlagArgs = struct {
     short: ?*const [2]u8 = "-h",
     long: ?[]const u8 = "--help",
     help: []const u8 = "print this help message",
+    UserContext: type,
 };
 
 // this doesn't work in situ,
-pub fn HelpFlag(comptime args: HelpFlagArgs) FlagOption {
-    return FlagOption{
+pub fn HelpFlag(comptime args: HelpFlagArgs) FlagOption(args.UserContext) {
+    return FlagOption(args.UserContext){
         .name = args.name,
         .truthy = .{ .short = args.short, .long = args.long },
         .help = args.help,
         .hideResult = true,
-        .eager = produceHelp,
+        .eager = produceHelp(args.UserContext),
     };
 }
 
 // but this does, which is kind of silly.
 pub const defaultHelpFlag = HelpFlag(.{});
 
-pub fn Argument(comptime resultType: type) type {
+pub fn Argument(comptime args: ParameterArgs) type {
+    // NOTE: optional arguments are kind of weird, since they're identified by
+    // the order they're specified on the command line rather than by a named
+    // flag. As long as the order is not violated, it's perfectly safe to omit
+    // them if the provided specification supplies a default value.
+
     return struct {
-        pub fn brand(_: @This()) Brand {
-            return .Argument;
-        }
+        pub const brand: Brand = .Argument;
+        pub const mayBeOptional: bool = switch (@typeInfo(args.Output)) {
+            .Optional => true,
+            else => false,
+        };
+        pub const ResultType: type = args.Output;
+        pub const ContextType: type = args.UserContext;
 
         name: []const u8,
-        default: union(enum) { none: void, value: resultType } = .none,
-        handler: *const fn (input: []const u8) anyerror!resultType,
+        default: (if (mayBeOptional) args.Output else ?args.Output) = null,
+        handler: ?handlers.HandlerType(args) = handlers.getDefaultHandler(args),
         help: ?[]const u8 = null,
         hideResult: bool = false,
         // allow loading arguments from environmental variables? I don't think
         // it's possible to come up with sane semantics for this.
 
-        pub fn ResultType(comptime _: @This()) type {
-            return resultType;
-        }
-
-        pub fn required(self: @This()) bool {
-            return self.default == .none;
+        fn required(self: @This()) bool {
+            return !@TypeOf(self).mayBeOptional and self.default == null;
         }
     };
 }
 
-pub const StringArg = Argument([]const u8);
+pub fn StringArg(comptime UserContext: type) type {
+    return Argument(.{ .Output = []const u8, .UserContext = UserContext });
+}
 
 pub const CommandData = struct {
+    pub const brand: Brand = .Command;
+
     name: []const u8,
     help: []const u8 = "",
     // cheesy way to allow deferred initialization of the subcommands
@@ -219,50 +212,40 @@ pub const CommandData = struct {
 };
 
 /// spec is a tuple of ValuedOption, FlagOption, and Argument
-pub fn Command(
+pub fn CommandParser(
     comptime commandData: CommandData,
     comptime spec: anytype,
-    comptime UdType: type,
-    comptime callback: *const fn (userdata: UdType, res: CommandResult(spec)) anyerror!void,
+    comptime UserContext: type,
+    comptime callback: *const fn (UserContext, CommandResult(spec, UserContext)) anyerror!void,
 ) type {
     comptime var argCount = 0;
-    comptime var requiredOptions = 0;
     comptime for (spec) |param| {
-        switch (param.brand()) {
+        switch (@TypeOf(param).brand) {
             .Argument => argCount += 1,
-            .Option, .Flag => if (param.required()) {
-                requiredOptions += 1;
-            },
-            .Command => continue,
+            .Option, .Flag, .Command => continue,
         }
     };
 
-    const ResultType = CommandResult(spec);
+    const ResultType = CommandResult(spec, UserContext);
     const RequiredType = RequiredTracker(spec);
 
     const ParseState = enum { Mixed, ForcedArgs };
 
     return struct {
-        pub fn brand() Brand {
-            return .Command;
-        }
-        // copy happens at comptime
-        pub var data: CommandData = commandData;
+        pub const brand: Brand = .Command;
+        pub const ContextType = UserContext;
+        // this should be copied at compile time
+        var data: CommandData = commandData;
 
         /// parse command line arguments from an iterator
-        pub fn execute(alloc: std.mem.Allocator, comptime argit_type: type, argit: *argit_type, userdata: UdType) !void {
-
-            // we could precompute some tuples that would simplify some of the later logic:
-            // tuple of eager Options/Flags
-            // tuple of non-eager Options/Flags
-            // tuple of Arguments
-            // tuple of Commands
+        pub fn execute(self: @This(), alloc: std.mem.Allocator, comptime argit_type: type, argit: *argit_type, context: UserContext) !void {
+            try self.attachSubcommands(alloc);
 
             var result: ResultType = createCommandresult();
             var required: RequiredType = .{};
             var parseState: ParseState = .Mixed;
 
-            try extractEnvVars(alloc, &result, &required);
+            try extractEnvVars(alloc, &result, &required, context);
 
             var seenArgs: u32 = 0;
             argloop: while (argit.next()) |arg| {
@@ -287,10 +270,10 @@ pub fn Command(
                     if (arg[1] == '-') {
                         // we have a long flag or option
                         specloop: inline for (spec) |param| {
-                            switch (comptime param.brand()) {
+                            switch (@TypeOf(param).brand) {
                                 .Option => {
                                     // have to force lower the handler to runtime
-                                    var handler = param.handler;
+                                    // var handler = param.handler.?;
                                     if (param.long) |flag| {
                                         if (std.mem.eql(u8, flag, arg)) {
                                             if (comptime param.required()) {
@@ -299,7 +282,7 @@ pub fn Command(
 
                                             const val = argit.next() orelse return OptionError.MissingArgument;
                                             if (param.hideResult == false) {
-                                                @field(result, param.name) = try handler(val);
+                                                @field(result, param.name) = try param.handler.?(context, val);
                                             }
                                             continue :argloop;
                                         }
@@ -310,11 +293,7 @@ pub fn Command(
                                         if (variant[0]) |flag| {
                                             if (std.mem.eql(u8, flag, arg)) {
                                                 if (param.eager) |handler| {
-                                                    try handler(data);
-                                                }
-
-                                                if (comptime param.required()) {
-                                                    @field(required, param.name) = true;
+                                                    try handler(context, data);
                                                 }
 
                                                 if (param.hideResult == false) {
@@ -335,9 +314,9 @@ pub fn Command(
                         // we have a short flag, which may be multiple fused flags
                         shortloop: for (arg[1..]) |shorty, idx| {
                             specloop: inline for (spec) |param| {
-                                switch (comptime param.brand()) {
+                                switch (@TypeOf(param).brand) {
                                     .Option => {
-                                        var handler = param.handler;
+                                        // var handler = param.handler.?;
                                         if (param.short) |flag| {
                                             if (flag[1] == shorty) {
                                                 if (comptime param.required()) {
@@ -350,7 +329,7 @@ pub fn Command(
                                                     argit.next() orelse return OptionError.MissingArgument;
 
                                                 if (param.hideResult == false) {
-                                                    @field(result, param.name) = try handler(val);
+                                                    @field(result, param.name) = try param.handler.?(context, val);
                                                 }
                                                 continue :argloop;
                                             }
@@ -361,11 +340,7 @@ pub fn Command(
                                             if (variant[0]) |flag| {
                                                 if (flag[1] == shorty) {
                                                     if (param.eager) |handler| {
-                                                        try handler(data);
-                                                    }
-
-                                                    if (comptime param.required()) {
-                                                        @field(required, param.name) = true;
+                                                        try handler(context, data);
                                                     }
 
                                                     if (param.hideResult == false) {
@@ -388,22 +363,25 @@ pub fn Command(
                     defer seenArgs += 1;
                     comptime var idx = 0;
                     inline for (spec) |param| {
-                        switch (comptime param.brand()) {
+                        switch (@TypeOf(param).brand) {
+                            .Command => {
+                                if (std.mem.eql(u8, @TypeOf(param).data.name, arg)) {
+                                    // we're calling a subcommand
+                                    try checkErrors(seenArgs, required);
+                                    try callback(context, result);
+                                    return param.execute(alloc, argit_type, argit, context);
+                                }
+                            },
                             .Argument => {
                                 if (seenArgs == idx) {
-                                    var handler = param.handler;
-                                    @field(result, param.name) = try handler(arg);
+                                    if (comptime param.required()) {
+                                        @field(required, param.name) = true;
+                                    }
+                                    // var handler = param.handler;
+                                    @field(result, param.name) = try param.handler.?(context, arg);
                                     continue :argloop;
                                 }
                                 idx += 1;
-                            },
-                            .Command => {
-                                if (seenArgs == argCount and std.mem.eql(u8, param.data.name, arg)) {
-                                    // we're calling a subcommand
-                                    try checkErrors(seenArgs, required);
-                                    try callback(userdata, result);
-                                    return param.execute(alloc, argit_type, argit, userdata);
-                                }
                             },
                             else => continue,
                         }
@@ -411,7 +389,7 @@ pub fn Command(
                 }
             }
             try checkErrors(seenArgs, required);
-            try callback(userdata, result);
+            try callback(context, result);
         }
 
         inline fn checkErrors(seenArgs: u32, required: RequiredType) OptionError!void {
@@ -421,6 +399,8 @@ pub fn Command(
                 return OptionError.ExtraArguments;
             }
 
+            describeError(required);
+
             inline for (@typeInfo(@TypeOf(required)).Struct.fields) |field| {
                 if (@field(required, field.name) == false) {
                     return OptionError.MissingOption;
@@ -428,15 +408,23 @@ pub fn Command(
             }
         }
 
-        fn attachSubcommands(alloc: std.mem.Allocator) !void {
+        pub fn describeError(required: RequiredType) void {
+            inline for (@typeInfo(@TypeOf(required)).Struct.fields) |field| {
+                if (@field(required, field.name) == false) {
+                    std.debug.print("missing {s}\n", .{field.name});
+                }
+            }
+        }
+
+        fn attachSubcommands(_: @This(), alloc: std.mem.Allocator) !void {
             if (data.subcommands == null) {
                 data.subcommands = std.ArrayList(*CommandData).init(alloc);
             }
 
             inline for (spec) |param| {
-                switch (comptime param.brand()) {
+                switch (@TypeOf(param).brand) {
                     .Command => {
-                        try data.subcommands.append(&param);
+                        try data.subcommands.?.append(&@TypeOf(param).data);
                     },
                     else => continue,
                 }
@@ -468,31 +456,32 @@ pub fn Command(
             return true;
         }
 
-        fn extractEnvVars(alloc: std.mem.Allocator, result: *ResultType, required: *RequiredType) !void {
+        fn extractEnvVars(
+            alloc: std.mem.Allocator,
+            result: *ResultType,
+            required: *RequiredType,
+            context: UserContext,
+        ) !void {
             var env: std.process.EnvMap = try std.process.getEnvMap(alloc);
             defer env.deinit();
 
             inline for (spec) |param| {
-                switch (comptime param.brand()) {
+                const ParamType = @TypeOf(param);
+                switch (ParamType.brand) {
                     .Option => {
                         if (param.envVar) |want| {
                             if (env.get(want)) |value| {
-                                if (comptime param.required()) {
+                                if (param.required()) {
                                     @field(required, param.name) = true;
                                 }
 
-                                var handler = param.handler;
-                                @field(result, param.name) = try handler(value);
+                                @field(result, param.name) = try param.handler.?(context, value);
                             }
                         }
                     },
                     .Flag => {
                         if (param.envVar) |want| {
                             if (env.get(want)) |value| {
-                                if (comptime param.required()) {
-                                    @field(required, param.name) = true;
-                                }
-
                                 @field(result, param.name) = try scryTruthiness(alloc, value);
                             }
                         }
@@ -505,13 +494,10 @@ pub fn Command(
         inline fn createCommandresult() ResultType {
             var result: ResultType = undefined;
             inline for (spec) |param| {
-                switch (comptime param.brand()) {
+                switch (@TypeOf(param).brand) {
                     .Command => continue,
                     else => if (param.hideResult == false) {
-                        @field(result, param.name) = switch (param.default) {
-                            .none => continue,
-                            .value => |val| val,
-                        };
+                        @field(result, param.name) = param.default orelse continue;
                     },
                 }
             }
@@ -520,16 +506,31 @@ pub fn Command(
     };
 }
 
-pub fn CommandResult(comptime spec: anytype) type {
+pub fn CommandResult(comptime spec: anytype, comptime UserContext: type) type {
     comptime {
         // not sure how to do this without iterating twice, so let's iterate
         // twice
         var outsize = 0;
         for (spec) |param| {
-            switch (param.brand()) {
+            const ParamType = @TypeOf(param);
+            if (ParamType.ContextType != UserContext) {
+                @compileError("param \"" ++ param.name ++ "\" has wrong context type (wanted: " ++ @typeName(UserContext) ++ ", got: " ++ @typeName(ParamType.ContextType) ++ ")");
+            }
+            switch (ParamType.brand) {
+                .Argument, .Option => {
+                    if (param.handler == null) {
+                        @compileError("param \"" ++ param.name ++ "\" does not have a handler");
+                    }
+                },
+                else => {},
+            }
+
+            switch (ParamType.brand) {
                 .Command => continue,
-                else => if (param.hideResult == false) {
-                    outsize += 1;
+                else => {
+                    if (param.hideResult == false) {
+                        outsize += 1;
+                    }
                 },
             }
         }
@@ -538,22 +539,20 @@ pub fn CommandResult(comptime spec: anytype) type {
 
         var idx = 0;
         for (spec) |param| {
-            switch (param.brand()) {
+            const ParamType = @TypeOf(param);
+            switch (ParamType.brand) {
                 .Command => continue,
                 else => if (param.hideResult == true) continue,
             }
 
-            const fieldType = param.ResultType();
+            const FieldType = ParamType.ResultType;
 
             fields[idx] = .{
                 .name = param.name,
-                .field_type = fieldType,
-                .default_value = switch (param.default) {
-                    .none => null,
-                    .value => |val| @ptrCast(?*const anyopaque, &val),
-                },
+                .field_type = FieldType,
+                .default_value = @ptrCast(?*const anyopaque, &param.default),
                 .is_comptime = false,
-                .alignment = @alignOf(fieldType),
+                .alignment = @alignOf(FieldType),
             };
 
             idx += 1;
@@ -574,10 +573,16 @@ fn RequiredTracker(comptime spec: anytype) type {
         // twice
         var outsize = 0;
         for (spec) |param| {
-            switch (param.brand()) {
-                .Argument, .Command => continue,
-                else => {
-                    if (param.required()) outsize += 1;
+            const ParamType = @TypeOf(param);
+            switch (ParamType.brand) {
+                // flags are always optional, and commands don't map into the
+                // output type.
+                .Flag, .Command => continue,
+                .Argument, .Option => if (param.required()) {
+                    // if mayBeOptional is false, then the argument/option is
+                    // required. Otherwise, we have to check if a default has
+                    // been provided.
+                    outsize += 1;
                 },
             }
         }
@@ -586,9 +591,10 @@ fn RequiredTracker(comptime spec: anytype) type {
 
         var idx = 0;
         for (spec) |param| {
-            switch (param.brand()) {
-                .Argument, .Command => continue,
-                else => if (param.required()) {
+            const ParamType = @TypeOf(param);
+            switch (ParamType.brand) {
+                .Flag, .Command => continue,
+                .Argument, .Option => if (param.required()) {
                     fields[idx] = .{
                         .name = param.name,
                         .field_type = bool,
@@ -609,4 +615,8 @@ fn RequiredTracker(comptime spec: anytype) type {
             .is_tuple = false,
         } });
     }
+}
+
+test {
+    _ = meta;
 }
