@@ -10,12 +10,12 @@ pub fn UpdateDefaults(comptime input: type, comptime defaults: anytype) type {
     comptime {
         const inputInfo = @typeInfo(input);
         const fieldcount = switch (inputInfo) {
-            .Struct => |spec| {
+            .Struct => |spec| blk: {
                 if (spec.decls.len > 0) {
                     @compileError("UpdateDefaults only works on structs " ++
                         "without decls due to limitations in @Type.");
                 }
-                break spec.fields.len;
+                break :blk spec.fields.len;
             },
             else => @compileError("can only add default value to struct type"),
         };
@@ -47,6 +47,58 @@ pub fn UpdateDefaults(comptime input: type, comptime defaults: anytype) type {
         } });
     }
 }
+
+/// Stores type-erased pointers to items in comptime extensible data structures,
+/// which allows e.g. assembling a tuple through multiple calls rather than all
+/// at once.
+pub const MutableTuple = struct {
+    pointers: []const *const anyopaque = &[0]*const anyopaque{},
+    types: []const type = &[0]type{},
+
+    pub fn add(comptime self: *@This(), comptime item: anytype) void {
+        self.pointers = &(@as([self.pointers.len]*const anyopaque, self.pointers[0..self.pointers.len].*) ++ [1]*const anyopaque{@as(*const anyopaque, &item)});
+        self.types = &(@as([self.types.len]type, self.types[0..self.types.len].*) ++ [1]type{@TypeOf(item)});
+    }
+
+    pub fn retrieve(comptime self: @This(), comptime index: comptime_int) self.types[index] {
+        return @ptrCast(*const self.types[index], @alignCast(@alignOf(*const self.types[index]), self.pointers[index])).*;
+    }
+
+    pub fn realTuple(comptime self: @This()) self.TupleType() {
+        comptime {
+            var result: self.TupleType() = undefined;
+            var idx = 0;
+            while (idx < self.types.len) : (idx += 1) {
+                result[idx] = self.retrieve(idx);
+            }
+            return result;
+        }
+    }
+
+    pub fn TupleType(comptime self: @This()) type {
+        comptime {
+            var fields: [self.types.len]StructField = undefined;
+            for (self.types) |Type, idx| {
+                var num_buf: [128]u8 = undefined;
+                fields[idx] = .{
+                    .name = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch unreachable,
+                    .field_type = Type,
+                    .default_value = null,
+                    // TODO: is this the right thing to do?
+                    .is_comptime = false,
+                    .alignment = if (@sizeOf(Type) > 0) @alignOf(Type) else 0,
+                };
+            }
+
+            return @Type(.{ .Struct = .{
+                .layout = .Auto,
+                .fields = &fields,
+                .decls = &.{},
+                .is_tuple = true,
+            } });
+        }
+    }
+};
 
 test "add basic default" {
     const Base = struct { a: u8 };
