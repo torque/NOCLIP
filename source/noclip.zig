@@ -128,7 +128,7 @@ pub fn CommandParser(
                         return OptionError.UnknownOption;
                     } else {
                         // we have a short flag, which may be multiple fused flags
-                        shortloop: for (arg[1..]) |shorty, idx| {
+                        shortloop: for (arg[1..], 0..) |shorty, idx| {
                             specloop: inline for (spec) |param| {
                                 switch (@TypeOf(param).brand) {
                                     .Option => {
@@ -251,13 +251,13 @@ pub fn CommandParser(
             }
         }
 
-        fn scryTruthiness(alloc: std.mem.Allocator, input: []const u8) !bool {
+        fn scryTruthiness(input: []const u8) bool {
             // empty string is falsy.
             if (input.len == 0) return false;
 
             if (input.len <= 5) {
-                const comp = try std.ascii.allocLowerString(alloc, input);
-                defer alloc.free(comp);
+                var lowerBuf: [5]u8 = undefined;
+                const comp = std.ascii.lowerString(&lowerBuf, input);
 
                 inline for ([_][]const u8{ "false", "no", "0" }) |candidate| {
                     if (std.mem.eql(u8, comp, candidate)) {
@@ -302,7 +302,7 @@ pub fn CommandParser(
                     .Flag => {
                         if (param.envVar) |want| {
                             if (env.get(want)) |value| {
-                                @field(result, param.name) = try scryTruthiness(alloc, value);
+                                @field(result, param.name) = scryTruthiness(value);
                             }
                         }
                     },
@@ -369,7 +369,7 @@ pub fn CommandResult(comptime spec: anytype, comptime UserContext: type) type {
 
             fields[idx] = .{
                 .name = param.name,
-                .field_type = FieldType,
+                .type = FieldType,
                 .default_value = @ptrCast(?*const anyopaque, &param.default),
                 .is_comptime = false,
                 .alignment = @alignOf(FieldType),
@@ -417,7 +417,7 @@ fn RequiredTracker(comptime spec: anytype) type {
                 .Argument, .Option => if (param.required()) {
                     fields[idx] = .{
                         .name = param.name,
-                        .field_type = bool,
+                        .type = bool,
                         .default_value = &false,
                         .is_comptime = false,
                         .alignment = @alignOf(bool),

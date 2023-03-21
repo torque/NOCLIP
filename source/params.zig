@@ -32,7 +32,7 @@ pub fn Option(comptime args: ParameterArgs) type {
 
     comptime var result = struct {
         pub const brand: Brand = .Option;
-        pub const mayBeOptional: bool = switch (@typeInfo(args.Output)) {
+        const mayBeOptional: bool = switch (@typeInfo(args.Output)) {
             .Optional => true,
             else => false,
         };
@@ -96,13 +96,18 @@ pub fn Flag(comptime UserContext: type) type {
         pub const ContextType: type = UserContext;
 
         name: []const u8,
-        default: bool = false,
+        default: ?bool = false,
         truthy: ShortLong = .{},
         falsy: ShortLong = .{},
         help: ?[]const u8 = null,
         envVar: ?[]const u8 = null,
         hideResult: bool = false,
         eager: ?*const fn (UserContext, CommandData) anyerror!void = null,
+
+        pub fn required(self: @This()) bool {
+            if (self.default) return true;
+            return false;
+        }
     };
 }
 
@@ -149,7 +154,7 @@ pub fn Argument(comptime args: ParameterArgs) type {
 
     return struct {
         pub const brand: Brand = .Argument;
-        pub const mayBeOptional: bool = switch (@typeInfo(args.Output)) {
+        const mayBeOptional: bool = switch (@typeInfo(args.Output)) {
             .Optional => true,
             else => false,
         };

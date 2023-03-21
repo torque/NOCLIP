@@ -21,7 +21,7 @@ pub fn UpdateDefaults(comptime input: type, comptime defaults: anytype) type {
         };
 
         var fields: [fieldcount]StructField = undefined;
-        for (inputInfo.Struct.fields) |field, idx| {
+        for (inputInfo.Struct.fields, 0..) |field, idx| {
             fields[idx] = .{
                 .name = field.name,
                 .field_type = field.field_type,
@@ -78,11 +78,11 @@ pub const MutableTuple = struct {
     pub fn TupleType(comptime self: @This()) type {
         comptime {
             var fields: [self.types.len]StructField = undefined;
-            for (self.types) |Type, idx| {
+            for (self.types, 0..) |Type, idx| {
                 var num_buf: [128]u8 = undefined;
                 fields[idx] = .{
                     .name = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch unreachable,
-                    .field_type = Type,
+                    .type = Type,
                     .default_value = null,
                     // TODO: is this the right thing to do?
                     .is_comptime = false,
