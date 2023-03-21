@@ -34,12 +34,22 @@ pub fn CommandParser(
     comptime UserContext: type,
     comptime callback: *const fn (UserContext, CommandResult(spec, UserContext)) anyerror!void,
 ) type {
-    comptime var argCount = 0;
-    comptime for (spec) |param| {
-        switch (@TypeOf(param).brand) {
-            .Argument => argCount += 1,
-            .Option, .Flag, .Command => continue,
+    const param_count: struct {
+        opts: comptime_int,
+        args: comptime_int,
+        subs: comptime_int,
+    } = comptime comp: {
+        var optc = 0;
+        var argc = 0;
+        var subc = 0;
+        for (spec) |param| {
+            switch (@TypeOf(param).brand) {
+                .Argument => argc += 1,
+                .Option, .Flag => optc += 1,
+                .Command => subc += 1,
+            }
         }
+        break :comp .{ .opts = optc, .args = argc, .subs = subc };
     };
 
     const ResultType = CommandResult(spec, UserContext);
@@ -62,6 +72,15 @@ pub fn CommandParser(
             var parseState: ParseState = .Mixed;
 
             try extractEnvVars(alloc, &result, &required, context);
+
+            // TODO: this does not even slightly work with subcommands
+            const progName = std.fs.path.basename(argit.next() orelse unreachable);
+
+            // TODO: only do this if the help flag has been passed. Alternatively, try
+            // to assemble this at comptime?
+            var helpDescription: params.CommandData = .{ .name = data.name };
+            try buildHelpDescription(progName, &helpDescription, alloc);
+            defer alloc.free(helpDescription.help);
 
             var seenArgs: u32 = 0;
             argloop: while (argit.next()) |arg| {
@@ -88,8 +107,6 @@ pub fn CommandParser(
                         specloop: inline for (spec) |param| {
                             switch (@TypeOf(param).brand) {
                                 .Option => {
-                                    // have to force lower the handler to runtime
-                                    // var handler = param.handler.?;
                                     if (param.long) |flag| {
                                         if (std.mem.eql(u8, flag, arg)) {
                                             if (comptime param.required()) {
@@ -109,7 +126,7 @@ pub fn CommandParser(
                                         if (variant[0]) |flag| {
                                             if (std.mem.eql(u8, flag, arg)) {
                                                 if (param.eager) |handler| {
-                                                    try handler(context, data);
+                                                    try handler(context, helpDescription);
                                                 }
 
                                                 if (param.hideResult == false) {
@@ -132,7 +149,6 @@ pub fn CommandParser(
                             specloop: inline for (spec) |param| {
                                 switch (@TypeOf(param).brand) {
                                     .Option => {
-                                        // var handler = param.handler.?;
                                         if (param.short) |flag| {
                                             if (flag[1] == shorty) {
                                                 if (comptime param.required()) {
@@ -156,7 +172,7 @@ pub fn CommandParser(
                                             if (variant[0]) |flag| {
                                                 if (flag[1] == shorty) {
                                                     if (param.eager) |handler| {
-                                                        try handler(context, data);
+                                                        try handler(context, helpDescription);
                                                     }
 
                                                     if (param.hideResult == false) {
@@ -193,7 +209,6 @@ pub fn CommandParser(
                                     if (comptime param.required()) {
                                         @field(required, param.name) = true;
                                     }
-                                    // var handler = param.handler;
                                     @field(result, param.name) = try param.handler.?(context, arg);
                                     continue :argloop;
                                 }
@@ -208,14 +223,260 @@ pub fn CommandParser(
             try callback(context, result);
         }
 
+        fn buildHelpDescription(
+            progName: []const u8,
+            inData: *params.CommandData,
+            alloc: std.mem.Allocator,
+        ) !void {
+            var seen: u32 = 0;
+            var maxlen: usize = 0;
+
+            var argnames: [param_count.args][]const u8 = undefined;
+            var args: [param_count.args]ParamRow = undefined;
+            inline for (spec) |param| {
+                switch (@TypeOf(param).brand) {
+                    .Argument => {
+                        argnames[seen] = param.name;
+                        args[seen] = try describeArgument(param, alloc);
+                        maxlen = @max(args[seen].flags.len, maxlen);
+                        seen += 1;
+                    },
+                    else => continue,
+                }
+            }
+
+            seen = 0;
+            var rows: [param_count.opts]ParamRow = undefined;
+            inline for (spec) |param| {
+                const describer = switch (@TypeOf(param).brand) {
+                    .Option => describeOption,
+                    .Flag => describeFlag,
+                    else => continue,
+                };
+                rows[seen] = try describer(param, alloc);
+                maxlen = @max(rows[seen].flags.len, maxlen);
+                seen += 1;
+            }
+
+            seen = 0;
+            var subs: [param_count.subs]ParamRow = undefined;
+            inline for (spec) |param| {
+                switch (@TypeOf(param).brand) {
+                    .Command => {
+                        subs[seen] = try describeSubcommand(param, alloc);
+                        maxlen = @max(subs[seen].flags.len, maxlen);
+                        seen += 1;
+                    },
+                    else => continue,
+                }
+            }
+
+            var buffer = std.ArrayList(u8).init(alloc);
+            const writer = buffer.writer();
+
+            for (argnames) |name| {
+                try std.fmt.format(writer, " <{s}>", .{name});
+            }
+
+            const short_args = try buffer.toOwnedSlice();
+            defer alloc.free(short_args);
+
+            try std.fmt.format(
+                writer,
+                "Usage: {s}{s}{s}{s}\n\n",
+                .{
+                    progName,
+                    if (param_count.opts > 0) " [options]" else "",
+                    if (param_count.args > 0) short_args else "",
+                    if (param_count.subs > 0) " [subcommand] ..." else "",
+                },
+            );
+
+            try writer.writeAll(data.help);
+
+            if (param_count.args > 0) {
+                try writer.writeAll("\n\nArguments:\n");
+
+                for (args) |arg| {
+                    defer arg.deinit(alloc);
+                    try std.fmt.format(
+                        writer,
+                        "  {[0]s: <[1]}{[2]s}\n",
+                        .{ arg.flags, maxlen + 2, arg.description },
+                    );
+                }
+            }
+
+            if (param_count.opts > 0) {
+                try writer.writeAll("\nOptions:\n");
+
+                for (rows) |row| {
+                    defer row.deinit(alloc);
+                    try std.fmt.format(
+                        writer,
+                        "  {[0]s: <[1]}{[2]s}\n",
+                        .{ row.flags, maxlen + 2, row.description },
+                    );
+                }
+            }
+
+            if (param_count.subs > 0) {
+                try writer.writeAll("\nSubcommands:\n");
+                // try std.fmt.format(writer, "\nSubcommands {d}:\n", .{param_count.subs});
+                for (subs) |sub| {
+                    defer sub.deinit(alloc);
+                    try std.fmt.format(
+                        writer,
+                        "  {[0]s: <[1]}{[2]s}\n",
+                        .{ sub.flags, maxlen + 2, sub.description },
+                    );
+                }
+            }
+
+            inData.help = try buffer.toOwnedSlice();
+        }
+
+        const ParamRow = struct {
+            flags: []const u8,
+            description: []const u8,
+
+            pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
+                alloc.free(self.flags);
+                alloc.free(self.description);
+            }
+        };
+
+        fn describeArgument(comptime param: anytype, alloc: std.mem.Allocator) !ParamRow {
+            var buffer = std.ArrayList(u8).init(alloc);
+            const writer = buffer.writer();
+
+            try writer.writeAll(param.name);
+            try std.fmt.format(writer, " ({s})", .{param.type_name()});
+
+            const flags = try buffer.toOwnedSlice();
+
+            if (param.help) |help| {
+                try writer.writeAll(help);
+            }
+            if (param.required()) {
+                try writer.writeAll(" [required]");
+            }
+            const description = try buffer.toOwnedSlice();
+
+            return ParamRow{ .flags = flags, .description = description };
+        }
+
+        fn describeOption(comptime param: anytype, alloc: std.mem.Allocator) !ParamRow {
+            var buffer = std.ArrayList(u8).init(alloc);
+            const writer = buffer.writer();
+
+            if (param.envVar) |varName| {
+                try std.fmt.format(writer, "{s}", .{varName});
+            }
+            if (param.short) |short| {
+                if (buffer.items.len > 0) {
+                    try writer.writeAll(", ");
+                }
+                try writer.writeAll(short);
+            }
+            if (param.long) |long| {
+                if (buffer.items.len > 0) {
+                    try writer.writeAll(", ");
+                }
+                try writer.writeAll(long);
+            }
+            try std.fmt.format(writer, " ({s})", .{param.type_name()});
+
+            const flags = try buffer.toOwnedSlice();
+
+            if (param.help) |help| {
+                try writer.writeAll(help);
+            }
+            if (param.required()) {
+                try writer.writeAll(" [required]");
+            }
+            const description = try buffer.toOwnedSlice();
+
+            return ParamRow{ .flags = flags, .description = description };
+        }
+
+        fn describeFlag(comptime param: anytype, alloc: std.mem.Allocator) !ParamRow {
+            var buffer = std.ArrayList(u8).init(alloc);
+            const writer = buffer.writer();
+
+            var truthy_seen: bool = false;
+            var falsy_seen: bool = false;
+
+            if (param.truthy.short) |short| {
+                try writer.writeAll(short);
+                truthy_seen = true;
+            }
+            if (param.truthy.long) |long| {
+                if (truthy_seen) {
+                    try writer.writeAll(", ");
+                }
+                try writer.writeAll(long);
+                truthy_seen = true;
+            }
+
+            if (param.falsy.short) |short| {
+                if (truthy_seen) {
+                    try writer.writeAll("/");
+                }
+                try writer.writeAll(short);
+                falsy_seen = true;
+            }
+            if (param.falsy.long) |long| {
+                if (falsy_seen) {
+                    try writer.writeAll(", ");
+                } else if (truthy_seen) {
+                    try writer.writeAll("/");
+                }
+                try writer.writeAll(long);
+                falsy_seen = true;
+            }
+
+            if (param.envVar) |varName| {
+                try std.fmt.format(writer, " ({s})", .{varName});
+            }
+
+            const flags = try buffer.toOwnedSlice();
+
+            if (param.help) |help| {
+                try writer.writeAll(help);
+            }
+            if (param.required()) {
+                try writer.writeAll(" [required]");
+            }
+            const description = try buffer.toOwnedSlice();
+
+            return ParamRow{ .flags = flags, .description = description };
+        }
+
+        fn describeSubcommand(comptime param: anytype, alloc: std.mem.Allocator) !ParamRow {
+            var buffer = std.ArrayList(u8).init(alloc);
+            const writer = buffer.writer();
+
+            const paramdata = @TypeOf(param).data;
+
+            try writer.writeAll(paramdata.name);
+
+            const flags = try buffer.toOwnedSlice();
+
+            try writer.writeAll(paramdata.help);
+            const description = try buffer.toOwnedSlice();
+
+            return ParamRow{ .flags = flags, .description = description };
+        }
+
         pub fn OutType() type {
             return CommandResult(spec, UserContext);
         }
 
         inline fn checkErrors(seenArgs: u32, required: RequiredType) OptionError!void {
-            if (seenArgs < argCount) {
+            if (seenArgs < param_count.args) {
                 return OptionError.MissingArgument;
-            } else if (seenArgs > argCount) {
+            } else if (seenArgs > param_count.args) {
                 return OptionError.ExtraArguments;
             }
 
@@ -291,7 +552,7 @@ pub fn CommandParser(
                     .Option => {
                         if (param.envVar) |want| {
                             if (env.get(want)) |value| {
-                                if (param.required()) {
+                                if (comptime param.required()) {
                                     @field(required, param.name) = true;
                                 }
 

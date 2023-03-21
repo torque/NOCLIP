@@ -21,6 +21,7 @@ pub const ArgCount = union(enum) {
 pub const ParameterArgs = struct {
     Output: type,
     UserContext: type,
+    nice_type: ?[]const u8 = null,
 };
 
 pub fn Option(comptime args: ParameterArgs) type {
@@ -67,13 +68,18 @@ pub fn Option(comptime args: ParameterArgs) type {
         pub fn required(self: @This()) bool {
             return !@TypeOf(self).mayBeOptional and self.default == null;
         }
+
+        pub fn type_name(self: @This()) []const u8 {
+            if (args.nice_type) |name| return name;
+            return @typeName(@TypeOf(self).ResultType);
+        }
     };
 
     return result;
 }
 
 pub fn StringOption(comptime UserContext: type) type {
-    return Option(.{ .Output = []const u8, .UserContext = UserContext });
+    return Option(.{ .Output = []const u8, .UserContext = UserContext, .nice_type = "string" });
 }
 
 // this could be Option(bool) except it allows truthy/falsy flag variants
@@ -105,8 +111,12 @@ pub fn Flag(comptime UserContext: type) type {
         eager: ?*const fn (UserContext, CommandData) anyerror!void = null,
 
         pub fn required(self: @This()) bool {
-            if (self.default) return true;
-            return false;
+            if (self.default) |_| return false;
+            return true;
+        }
+
+        pub fn type_name(_: @This()) []const u8 {
+            return "bool";
         }
     };
 }
@@ -131,7 +141,7 @@ pub const HelpFlagArgs = struct {
     name: []const u8 = "help",
     short: ?*const [2]u8 = "-h",
     long: ?[]const u8 = "--help",
-    help: []const u8 = "print this help message",
+    help: []const u8 = "print this help message and exit",
 };
 
 pub fn HelpFlag(comptime UserContext: type, comptime args: HelpFlagArgs) Flag(UserContext) {
@@ -172,11 +182,16 @@ pub fn Argument(comptime args: ParameterArgs) type {
         pub fn required(self: @This()) bool {
             return !@TypeOf(self).mayBeOptional and self.default == null;
         }
+
+        pub fn type_name(self: @This()) []const u8 {
+            if (args.nice_type) |name| return name;
+            return @typeName(@TypeOf(self).ResultType);
+        }
     };
 }
 
 pub fn StringArg(comptime UserContext: type) type {
-    return Argument(.{ .Output = []const u8, .UserContext = UserContext });
+    return Argument(.{ .Output = []const u8, .UserContext = UserContext, .nice_type = "string" });
 }
 
 pub const CommandData = struct {

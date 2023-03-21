@@ -6,21 +6,20 @@ fn GenCommand(comptime UserContext: type, comptime cData: params.CommandData) ty
     return struct {
         argspec: meta.MutableTuple = .{},
 
-        StringOption: type = params.Option(.{ .Output = []const u8, .UserContext = UserContext }),
-        StringArgument: type = params.Argument(.{ .Output = []const u8, .UserContext = UserContext }),
+        StringOption: type = params.StringOption(UserContext),
+        StringArgument: type = params.StringArg(UserContext),
         Flag: type = params.Flag(UserContext),
-        defaultHelpFlag: params.Flag(UserContext) = HelpFlag(.{}),
+        defaultHelpFlag: params.Flag(UserContext) = HelpFlag(undefined, .{}),
 
-        // have to provide the first argument in order for these functions to be
-        // accessible from an instance, which is kind of annoying.
         pub fn Option(comptime _: @This(), comptime Output: type) type {
             return params.Option(.{ .Output = Output, .UserContext = UserContext });
         }
+
         pub fn Argument(comptime _: @This(), comptime Output: type) type {
             return params.Argument(.{ .Output = Output, .UserContext = UserContext });
         }
 
-        pub fn HelpFlag(comptime args: params.HelpFlagArgs) params.Flag(UserContext) {
+        pub fn HelpFlag(comptime _: @This(), comptime args: params.HelpFlagArgs) params.Flag(UserContext) {
             return params.HelpFlag(UserContext, args);
         }
 
