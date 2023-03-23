@@ -304,9 +304,12 @@ pub fn CommandParser(
             );
 
             try writer.writeAll(data.help);
+            if (!std.mem.endsWith(u8, data.help, "\n")) {
+                try writer.writeAll("\n");
+            }
 
             if (param_count.args > 0) {
-                try writer.writeAll("\n\nArguments:\n");
+                try writer.writeAll("\nArguments:\n");
 
                 for (args) |arg| {
                     defer arg.deinit(alloc);
