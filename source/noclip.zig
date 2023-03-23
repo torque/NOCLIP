@@ -111,12 +111,16 @@ pub fn CommandParser(
                             switch (@TypeOf(param).brand) {
                                 .Option => {
                                     if (param.long) |flag| {
-                                        if (std.mem.eql(u8, flag, arg)) {
+                                        if (std.mem.startsWith(u8, arg, flag) and (flag.len == arg.len or arg[flag.len] == '=')) {
+                                            const val = if (flag.len == arg.len)
+                                                argit.next() orelse return OptionError.MissingArgument
+                                            else
+                                                arg[flag.len + 1 ..];
+
                                             if (comptime param.required()) {
                                                 @field(required, param.name) = true;
                                             }
 
-                                            const val = argit.next() orelse return OptionError.MissingArgument;
                                             if (param.hideResult == false) {
                                                 @field(result, param.name) = try param.handler.?(context, val);
                                             }
