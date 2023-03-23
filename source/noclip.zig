@@ -63,8 +63,11 @@ pub fn CommandParser(
         // this should be copied at compile time
         var data: params.CommandData = commandData;
 
-        /// parse command line arguments from an iterator
         pub fn execute(self: @This(), alloc: std.mem.Allocator, comptime argit_type: type, argit: *argit_type, context: UserContext) !void {
+            return try self.internal_execute(alloc, argit_type, argit, context, null);
+        }
+
+        fn internal_execute(self: @This(), alloc: std.mem.Allocator, comptime argit_type: type, argit: *argit_type, context: UserContext, prog: ?[]const u8) !void {
             try self.attachSubcommands(alloc);
 
             var result: ResultType = createCommandresult();
@@ -74,7 +77,7 @@ pub fn CommandParser(
             try extractEnvVars(alloc, &result, &required, context);
 
             // TODO: this does not even slightly work with subcommands
-            const progName = std.fs.path.basename(argit.next() orelse unreachable);
+            const progName = prog orelse std.fs.path.basename(argit.next() orelse @panic("base, name?"));
 
             // TODO: only do this if the help flag has been passed. Alternatively, try
             // to assemble this at comptime?
@@ -197,11 +200,15 @@ pub fn CommandParser(
                     inline for (spec) |param| {
                         switch (@TypeOf(param).brand) {
                             .Command => {
-                                if (std.mem.eql(u8, @TypeOf(param).data.name, arg)) {
+                                const name = @TypeOf(param).data.name;
+                                if (std.mem.eql(u8, name, arg)) {
                                     // we're calling a subcommand
                                     try checkErrors(seenArgs, required);
                                     try callback(context, result);
-                                    return param.execute(alloc, argit_type, argit, context);
+
+                                    const combined = try std.mem.join(alloc, " ", &[_][]const u8{ progName, name });
+                                    defer alloc.free(combined);
+                                    return param.internal_execute(alloc, argit_type, argit, context, combined);
                                 }
                             },
                             .Argument => {
