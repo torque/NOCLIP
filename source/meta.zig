@@ -48,6 +48,10 @@ pub fn UpdateDefaults(comptime input: type, comptime defaults: anytype) type {
     }
 }
 
+pub fn enum_length(comptime T: type) comptime_int {
+    return @typeInfo(T).Enum.fields.len;
+}
+
 /// Stores type-erased pointers to items in comptime extensible data structures,
 /// which allows e.g. assembling a tuple through multiple calls rather than all
 /// at once.
@@ -81,7 +85,7 @@ pub const MutableTuple = struct {
             for (self.types, 0..) |Type, idx| {
                 var num_buf: [128]u8 = undefined;
                 fields[idx] = .{
-                    .name = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch unreachable,
+                    .name = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch @compileError("failed to write field"),
                     .type = Type,
                     .default_value = null,
                     // TODO: is this the right thing to do?

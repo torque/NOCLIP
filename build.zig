@@ -17,11 +17,8 @@ pub fn build(b: *std.build.Builder) void {
 
     const demo_exe = b.addExecutable(.{
         .name = "noclip-demo",
-        .root_source_file = .{ .path = "demo/demo.zig" },
+        .root_source_file = .{ .path = "source/doodle.zig" },
     });
-    demo_exe.addModule("noclip", b.createModule(.{
-        .source_file = .{ .path = "source/noclip.zig" },
-    }));
     const install_demo = b.addInstallArtifact(demo_exe);
     demo.dependOn(&install_demo.step);
 
