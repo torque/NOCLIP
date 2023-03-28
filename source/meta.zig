@@ -52,6 +52,41 @@ pub fn enum_length(comptime T: type) comptime_int {
     return @typeInfo(T).Enum.fields.len;
 }
 
+pub fn SliceIterator(comptime T: type) type {
+    // could be expanded to use std.meta.Elem, perhaps
+    const ResultType = std.meta.Child(T);
+
+    return struct {
+        index: usize,
+        data: T,
+
+        pub const InitError = error{};
+
+        pub fn wrap(value: T) @This() {
+            return @This(){ .index = 0, .data = value };
+        }
+
+        pub fn next(self: *@This()) ?ResultType {
+            if (self.index == self.data.len) return null;
+
+            defer self.index += 1;
+            return self.data[self.index];
+        }
+
+        pub fn peek(self: *@This()) ?ResultType {
+            if (self.index == self.data.len) return null;
+
+            return self.data[self.index];
+        }
+
+        pub fn skip(self: *@This()) void {
+            if (self.index == self.data.len) return;
+
+            self.index += 1;
+        }
+    };
+}
+
 /// Stores type-erased pointers to items in comptime extensible data structures,
 /// which allows e.g. assembling a tuple through multiple calls rather than all
 /// at once.
