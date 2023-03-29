@@ -79,6 +79,12 @@ pub fn SliceIterator(comptime T: type) type {
             return self.data[self.index];
         }
 
+        pub fn rewind(self: *@This()) void {
+            if (self.index == 0) return;
+
+            self.index -= 1;
+        }
+
         pub fn skip(self: *@This()) void {
             if (self.index == self.data.len) return;
 

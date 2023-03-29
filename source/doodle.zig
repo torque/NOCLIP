@@ -6,12 +6,6 @@ const ncmeta = @import("./meta.zig");
 
 const ConverterSignature = converters.ConverterSignature;
 
-const ParameterType = enum {
-    Nominal,
-    Ordinal,
-    Executable,
-};
-
 const Errors = error{
     BadConfiguration,
     MissingTag,
@@ -23,11 +17,17 @@ const Errors = error{
 const ParseError = error{
     UnexpectedFailure,
     EmptyArgs,
-    ValueMissing,
-    UnexpectedValue,
+    MissingValue,
+    ExtraValue,
     FusedShortTagValueMissing,
     UnknownLongTagParameter,
     UnknownShortTagParameter,
+};
+
+const ParameterType = enum {
+    Nominal,
+    Ordinal,
+    Executable,
 };
 
 // in theory, we could also have a flexible value count, which could be followed by
@@ -36,7 +36,11 @@ const ParseError = error{
 // complexity for little gain. The `mv` use case can be much more easily handled
 // with a greedy value and then splitting in the value handler.
 const ValueCount = union(enum) {
+    flag: void,
+    count: void,
     fixed: u32,
+    // variable value delimited by a character, e.g. `find -exec +` style
+    // delimited: []const u8
     greedy: void,
 };
 
@@ -46,7 +50,7 @@ const FlagBias = enum {
     unbiased,
 
     pub fn string(comptime self: @This()) []const u8 {
-        return switch (self) {
+        return switch (comptime self) {
             .truthy => "true",
             .falsy => "false",
             else => @compileError("flag tag with unbiased bias?"),
@@ -54,58 +58,87 @@ const FlagBias = enum {
     }
 };
 
-const OptionResult = union(enum) {
-    Value: type,
-    flag: FlagBias,
-};
-
 pub const ParameterGenerics = struct {
-    ContextType: type = void,
-    result: OptionResult = .{ .Value = []const u8 },
+    UserContext: type = void,
+    OutputType: type = void,
     param_type: ParameterType,
+    value_count: ValueCount,
+    /// allow this named parameter to be passed multiple times.
+    /// values will be appended when it is encountered. If false, only the
+    /// final encountered instance will be used.
+    multi: bool,
 
-    pub fn no_context(comptime self: @This()) bool {
-        return self.ContextType == void;
+    pub fn has_context(comptime self: @This()) bool {
+        return comptime self.UserContext != void;
     }
 
     pub fn is_flag(comptime self: @This()) bool {
-        return self.result == .flag;
+        return comptime switch (self.value_count) {
+            .flag, .count => true,
+            .fixed, .greedy => false,
+        };
     }
 
-    pub fn ResultType(comptime self: @This()) type {
-        return switch (self.result) {
-            .Value => |res| res,
+    pub fn ConvertedType(comptime self: @This()) type {
+        // is this the correct way to collapse this?
+        return comptime if (self.multi and self.value_count != .count)
+            std.ArrayList(self.ReturnValue())
+        else
+            self.ReturnValue();
+    }
+
+    pub fn IntermediateType(comptime self: @This()) type {
+        return comptime if (self.multi and self.value_count != .count)
+            std.ArrayList(self.IntermediateValue())
+        else
+            self.IntermediateValue();
+    }
+
+    pub fn ReturnValue(comptime self: @This()) type {
+        return comptime switch (self.value_count) {
             .flag => bool,
+            .count => usize,
+            .fixed => |count| switch (count) {
+                0 => @compileError("bad fixed-zero parameter"),
+                1 => self.OutputType,
+                // it's actually impossible to use a list in the general case
+                // because the result may have varying types. A tuple would
+                // work, but cannot be iterated over without inline for. It may
+                // be worth adding a ".structured" value count for a type that
+                // consumes many inputs but produces a single output. It would
+                // be nice to parse a tag into a struct directly. For that use
+                // case, the output type must be decoupled from the input type.
+                else => self.OutputType,
+            },
+            .greedy => std.ArrayList(self.OutputType),
+        };
+    }
+
+    pub fn IntermediateValue(comptime self: @This()) type {
+        return comptime switch (self.value_count) {
+            .flag => []const u8,
+            .count => usize,
+            .fixed => |count| switch (count) {
+                0 => @compileError("bad fixed-zero parameter"),
+                1 => []const u8,
+                else => std.ArrayList([]const u8),
+            },
+            .greedy => return std.ArrayList([]const u8),
+        };
+    }
+
+    pub fn nonscalar(comptime self: @This()) bool {
+        return comptime switch (self.value_count) {
+            .flag, .count => false,
+            .fixed => |count| switch (count) {
+                0 => @compileError("bad fixed-zero parameter"),
+                1 => false,
+                else => true,
+            },
+            .greedy => true,
         };
     }
 };
-
-const ValuedGenericsBasis = struct { ContextType: type = void, Result: type };
-const FlagGenericsBasis = struct { ContextType: type = void, flag_bias: FlagBias = .truthy };
-
-fn tag_generics(comptime basis: ValuedGenericsBasis) ParameterGenerics {
-    return ParameterGenerics{
-        .ContextType = basis.ContextType,
-        .result = .{ .Value = basis.Result },
-        .param_type = .Nominal,
-    };
-}
-
-fn flag_generics(comptime basis: FlagGenericsBasis) ParameterGenerics {
-    return ParameterGenerics{
-        .ContextType = basis.ContextType,
-        .result = .{ .flag = basis.flag_bias },
-        .param_type = .Nominal,
-    };
-}
-
-fn arg_generics(comptime basis: ValuedGenericsBasis) ParameterGenerics {
-    return ParameterGenerics{
-        .ContextType = basis.ContextType,
-        .result = .{ .Value = basis.Result },
-        .param_type = .Ordinal,
-    };
-}
 
 fn OptionConfig(comptime generics: ParameterGenerics) type {
     return struct {
@@ -114,99 +147,103 @@ fn OptionConfig(comptime generics: ParameterGenerics) type {
         short_tag: ?[]const u8 = null,
         long_tag: ?[]const u8 = null,
         env_var: ?[]const u8 = null,
-
-        value_count: ValueCount = if (generics.is_flag()) .{ .fixed = 0 } else .{ .fixed = 1 },
-        default: ?generics.ResultType() = null,
-        converter: ?ConverterSignature(generics) = null,
         description: []const u8 = "", // description for output in help text
+
+        default: ?generics.OutputType = null,
+        converter: ?ConverterSignature(generics) = null,
 
         eager: bool = false,
         required: bool = generics.param_type == .Ordinal,
         global: bool = false,
-        multi: bool = false,
+
         exposed: bool = true,
         secret: bool = false,
-        nice_type_name: []const u8 = @typeName(generics.ResultType()),
+        nice_type_name: []const u8 = @typeName(generics.OutputType),
+        flag_bias: FlagBias = .unbiased,
+    };
+}
+
+fn FlagConfig(comptime generics: ParameterGenerics) type {
+    const ShortLongPair = struct {
+        short_tag: ?[]const u8 = null,
+        long_tag: ?[]const u8 = null,
+    };
+
+    return struct {
+        name: []const u8,
+
+        truthy: ?ShortLongPair = null,
+        falsy: ?ShortLongPair = null,
+        env_var: ?[]const u8 = null,
+        description: []const u8 = "",
+
+        default: ?bool = null,
+        converter: ?ConverterSignature(generics) = null,
+
+        eager: bool = false,
+        required: bool = false,
+        global: bool = false,
+
+        exposed: bool = true,
+        secret: bool = false,
     };
 }
 
 fn OptionType(comptime generics: ParameterGenerics) type {
     return struct {
+        pub const G: ParameterGenerics = generics;
         pub const param_type: ParameterType = generics.param_type;
         pub const is_flag: bool = generics.is_flag();
-        pub const flag_bias: FlagBias = if (is_flag) generics.result.flag else .unbiased;
+        pub const value_count: ValueCount = generics.value_count;
+        pub const multi: bool = generics.multi;
 
         name: []const u8,
         short_tag: ?[]const u8,
         long_tag: ?[]const u8,
         env_var: ?[]const u8,
-
         /// description for output in help text
         description: []const u8,
-        default: ?generics.ResultType(),
-        converter: ConverterSignature(generics),
 
-        /// number of values this option wants to consume
-        value_count: ValueCount,
+        default: ?generics.OutputType,
+        converter: ConverterSignature(generics),
 
         /// the option converter will be run eagerly, before full command line
         /// validation.
         eager: bool,
-
         /// the option cannot be omitted from the command line.
         required: bool,
-
         /// this option is parsed in a pre-parsing pass that consumes it. It
         /// may be present anywhere on the command line. A different way to
         /// solve this problem is by using an environment variable. It must be
         /// a tagged option.
         global: bool,
-        /// allow this named parameter to be passed multiple times.
-        /// values will be appended when it is encountered. If false, only the
-        /// final encountered instance will be used.
-        multi: bool,
+
         /// if false, do not expose the resulting value in the output type.
         /// the converter must have side effects for this option to do anything.
         exposed: bool,
         /// do not print help for this parameter
         secret: bool,
 
-        nice_type_name: []const u8, // friendly type name (string better than []const u8)
+        /// friendly type name ("string" is better than "[]const u8")
+        nice_type_name: []const u8,
+        /// internal field for handling flag value biasing. Do not overwrite unless you
+        /// want weird things to happen.
+        flag_bias: FlagBias,
 
-        pub fn ResultType(comptime self: @This()) type {
-            // is this the correct way to collapse this?
-            return comptime if (self.multi)
-                std.ArrayList(self._RType())
-            else
-                self._RType();
-        }
-
-        inline fn _RType(comptime self: @This()) type {
-            comptime switch (self.value_count) {
-                .fixed => |count| {
-                    return switch (count) {
-                        0, 1 => generics.ResultType(),
-                        // TODO: use an ArrayList instead? it generalizes a bit better
-                        // (i.e. can use the same codepath for multi-fixed and greedy)
-                        else => [count]generics.ResultType(),
-                    };
-                },
-                .greedy => return std.ArrayList(generics.ResultType()),
-            };
+        pub fn IntermediateValue(comptime _: @This()) type {
+            return generics.IntermediateValue();
         }
     };
 }
 
 fn check_short(comptime short_tag: ?[]const u8) void {
-    if (short_tag) |short| {
-        if (short.len != 2 or short[0] != '-') @compileError("bad short tag" ++ short);
-    }
+    const short = comptime short_tag orelse return;
+    if (short.len != 2 or short[0] != '-') @compileError("bad short tag" ++ short);
 }
 
 fn check_long(comptime long_tag: ?[]const u8) void {
-    if (long_tag) |long| {
-        if (long.len < 3 or long[0] != '-' or long[1] != '-') @compileError("bad long tag" ++ long);
-    }
+    const long = comptime long_tag orelse return;
+    if (long.len < 3 or long[0] != '-' or long[1] != '-') @compileError("bad long tag" ++ long);
 }
 
 fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionConfig(generics)) OptionType(generics) {
@@ -227,223 +264,237 @@ fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionConfig
     // and the OptionConfig, is the OptionConfig is just unvalidated parameters,
     // whereas the OptionType is an instance of an object that has been
     // validated.
-    const converter = opts.converter orelse converters.default_converter(generics) orelse {
-        @compileLog(opts);
-        @compileError("implement me");
-    };
+    const converter = opts.converter orelse
+        (converters.default_converter(generics) orelse @compileError("no converter provided for " ++ opts.name ++ "and no default exists"));
 
     return OptionType(generics){
         .name = opts.name,
+        //
         .short_tag = opts.short_tag,
         .long_tag = opts.long_tag,
         .env_var = opts.env_var,
+        //
         .description = opts.description,
         .default = opts.default,
         .converter = converter,
-        .value_count = opts.value_count,
+        //
         .eager = opts.eager,
         .required = opts.required,
-        .multi = opts.multi,
-        .exposed = opts.exposed,
         .global = opts.global,
+        //
+        .exposed = opts.exposed,
         .secret = opts.secret,
         .nice_type_name = opts.nice_type_name,
+        .flag_bias = opts.flag_bias,
     };
 }
 
-fn make_argument(comptime generics: ParameterGenerics, comptime opts: OptionConfig(generics)) OptionType(generics) {
-    // TODO: it would technically be possible to support specification of
-    // ordered arguments through environmental variables, but it doesn't really
-    // make a lot of sense. The algorithm would consume the env var greedily
-    if (opts.short_tag != null or opts.long_tag != null or opts.env_var != null) {
-        @compileLog(opts);
-        @compileError("argument " ++ opts.name ++ " must not have a long or short tag or an env var");
+fn make_argument(
+    comptime generics: ParameterGenerics,
+    comptime opts: OptionConfig(generics),
+) OptionType(generics) {
+    comptime {
+        if (opts.short_tag != null or opts.long_tag != null or opts.env_var != null) {
+            @compileError("argument " ++ opts.name ++ " must not have a long or short tag or an env var");
+        }
+
+        const converter = opts.converter orelse
+            (converters.default_converter(generics) orelse @compileError("no converter provided for " ++ opts.name ++ "and no default exists"));
+
+        if (generics.multi == true)
+            @compileError("argument " ++ opts.name ++ " cannot be multi");
+
+        return OptionType(generics){
+            .name = opts.name,
+            //
+            .short_tag = opts.short_tag,
+            .long_tag = opts.long_tag,
+            .env_var = opts.env_var,
+            //
+            .description = opts.description,
+            .default = opts.default,
+            .converter = converter,
+            //
+            .eager = opts.eager,
+            .required = opts.required,
+            .global = opts.global,
+            //
+            .exposed = opts.exposed,
+            .secret = opts.secret,
+            .nice_type_name = opts.nice_type_name,
+            .flag_bias = .unbiased,
+        };
     }
-
-    const converter = opts.converter orelse converters.default_converter(generics) orelse {
-        @compileLog(opts);
-        @compileError("implement me");
-    };
-
-    if (opts.multi == true) @compileError("argument " ++ opts.name ++ " cannot be multi");
-
-    return OptionType(generics){
-        .name = opts.name,
-        .short_tag = opts.short_tag,
-        .long_tag = opts.long_tag,
-        .env_var = opts.env_var,
-        .description = opts.description,
-        .default = opts.default,
-        .converter = converter,
-        .value_count = opts.value_count,
-        .eager = opts.eager,
-        .required = opts.required,
-        .multi = opts.multi,
-        .global = opts.global,
-        .exposed = opts.exposed,
-        .secret = opts.secret,
-        .nice_type_name = opts.nice_type_name,
-    };
 }
 
-const ShortLongPair = struct {
-    short_tag: ?[]const u8 = null,
-    long_tag: ?[]const u8 = null,
-};
-
-fn FlagBuilderArgs(comptime ContextType: type) type {
+fn BuilderGenerics(comptime UserContext: type) type {
     return struct {
-        name: []const u8,
-        truthy: ?ShortLongPair = null,
-        falsy: ?ShortLongPair = null,
-        env_var: ?[]const u8 = null,
-        description: []const u8 = "",
-
-        default: ?bool = null,
-        converter: ?ConverterSignature(flag_generics(.{ .ContextType = ContextType })) = null,
-        eager: bool = false,
-        required: bool = false,
-        global: bool = false,
+        OutputType: type = void,
+        value_count: ValueCount = .{ .fixed = 1 },
         multi: bool = false,
-        exposed: bool = true,
-        secret: bool = false,
+
+        pub fn arg_gen(comptime self: @This()) ParameterGenerics {
+            if (self.OutputType == void) @compileError("argument must have OutputType specified");
+            if (self.value_count == .flag) @compileError("argument may not be a flag");
+            if (self.value_count == .count) @compileError("argument may not be a count");
+
+            return ParameterGenerics{
+                .UserContext = UserContext,
+                .OutputType = self.OutputType,
+                .param_type = .Ordinal,
+                .value_count = self.value_count,
+                .multi = false,
+            };
+        }
+
+        pub fn opt_gen(comptime self: @This()) ParameterGenerics {
+            if (self.OutputType == void) @compileError("option must have OutputType specified");
+            if (self.value_count == .flag) @compileError("option may not be a flag");
+
+            return ParameterGenerics{
+                .UserContext = UserContext,
+                .OutputType = self.OutputType,
+                .param_type = .Nominal,
+                .value_count = self.value_count,
+                .multi = self.multi,
+            };
+        }
+
+        pub fn count_gen(comptime _: @This()) ParameterGenerics {
+            return ParameterGenerics{
+                .UserContext = UserContext,
+                .OutputType = usize,
+                .param_type = .Nominal,
+                .value_count = .count,
+                .multi = true,
+            };
+        }
+
+        pub fn flag_gen(comptime self: @This()) ParameterGenerics {
+            return ParameterGenerics{
+                .UserContext = UserContext,
+                .OutputType = bool,
+                .param_type = .Nominal,
+                .value_count = .flag,
+                .multi = self.multi,
+            };
+        }
     };
 }
 
-fn CommandBuilder(comptime ContextType: type) type {
+fn CommandBuilder(comptime UserContext: type) type {
     return struct {
         param_spec: ncmeta.MutableTuple = .{},
 
-        pub const UserContextType = ContextType;
+        pub const UserContextType = UserContext;
 
         pub fn add_argument(
             comptime self: *@This(),
-            comptime Result: type,
-            comptime args: OptionConfig(arg_generics(.{ .ContextType = ContextType, .Result = Result })),
+            comptime bgen: BuilderGenerics(UserContext),
+            comptime config: OptionConfig(bgen.arg_gen()),
         ) void {
-            self.param_spec.add(make_argument(
-                arg_generics(.{ .ContextType = ContextType, .Result = Result }),
-                args,
-            ));
+            self.param_spec.add(make_argument(bgen.arg_gen(), config));
         }
 
         pub fn add_option(
             comptime self: *@This(),
-            comptime Result: type,
-            comptime args: OptionConfig(tag_generics(.{ .ContextType = ContextType, .Result = Result })),
+            comptime bgen: BuilderGenerics(UserContext),
+            comptime config: OptionConfig(bgen.opt_gen()),
         ) void {
-            const generics = tag_generics(.{ .ContextType = ContextType, .Result = Result });
-            if (comptime args.value_count == .fixed and args.value_count.fixed == 0) {
+            if (comptime bgen.value_count == .fixed and bgen.value_count.fixed == 0) {
                 @compileError(
                     "please use add_flag rather than add_option to " ++
                         "create a 0-argument option",
                 );
             }
 
-            self.param_spec.add(make_option(generics, args));
+            self.param_spec.add(make_option(bgen.opt_gen(), config));
         }
 
         pub fn set_help_flag(
             comptime self: *@This(),
-            comptime args: OptionConfig(flag_generics(.{ .ContextType = ContextType, .flag_bias = .truthy })),
+            comptime bgen: BuilderGenerics(UserContext),
+            comptime config: FlagConfig(bgen.flag_gen()),
         ) void {
             _ = self;
-            _ = args;
+            _ = config;
         }
 
         pub fn add_flag(
             comptime self: *@This(),
-            comptime build_args: FlagBuilderArgs(ContextType),
+            comptime bgen: BuilderGenerics(UserContext),
+            comptime config: FlagConfig(bgen.flag_gen()),
         ) void {
-            if (build_args.truthy == null and build_args.falsy == null and build_args.env_var == null) {
-                @compileError(
-                    "flag " ++
-                        build_args.name ++
-                        " must have at least one of truthy flags, falsy flags, or env_var flags",
-                );
-            }
-
-            if (build_args.truthy) |truthy_pair| {
-                if (truthy_pair.short_tag == null and truthy_pair.long_tag == null) {
+            comptime {
+                if (config.truthy == null and config.falsy == null and config.env_var == null) {
                     @compileError(
                         "flag " ++
-                            build_args.name ++
-                            " truthy pair must have at least short or long tags set",
+                            config.name ++
+                            " must have at least one of truthy flags, falsy flags, or env_var flags",
                     );
                 }
 
-                const generics = flag_generics(.{ .ContextType = ContextType, .flag_bias = .truthy });
-
-                const args = OptionConfig(generics){
-                    .name = build_args.name,
-                    .short_tag = truthy_pair.short_tag,
-                    .long_tag = truthy_pair.long_tag,
-                    .env_var = null,
-                    .description = build_args.description,
-                    .value_count = .{ .fixed = 0 },
-                    .default = build_args.default,
-                    .converter = build_args.converter,
-                    .eager = build_args.eager,
-                    .required = build_args.required,
-                    .global = build_args.global,
-                    .multi = build_args.multi,
-                    .exposed = build_args.exposed,
-                    .secret = build_args.secret,
-                };
-
-                self.param_spec.add(make_option(generics, args));
-            }
-
-            if (build_args.falsy) |falsy_pair| {
-                if (falsy_pair.short_tag == null and falsy_pair.long_tag == null) {
-                    @compileError(
-                        "flag " ++
-                            build_args.name ++
-                            " falsy pair must have at least short or long tags set",
-                    );
-                }
-
-                const generics = flag_generics(.{ .ContextType = ContextType, .flag_bias = .falsy });
-                const args = OptionConfig(generics){
-                    .name = build_args.name,
-                    .short_tag = falsy_pair.short_tag,
-                    .long_tag = falsy_pair.long_tag,
-                    .env_var = null,
-                    .description = build_args.description,
-                    .value_count = .{ .fixed = 0 },
-                    .default = build_args.default,
-                    .converter = build_args.converter,
-                    .eager = build_args.eager,
-                    .required = build_args.required,
-                    .global = build_args.global,
-                    .multi = build_args.multi,
-                    .exposed = build_args.exposed,
-                    .secret = build_args.secret,
-                };
-
-                self.param_spec.add(make_option(generics, args));
-            }
-
-            if (build_args.env_var) |env_var| {
-                const generics = flag_generics(.{ .ContextType = ContextType, .flag_bias = .unbiased });
-                const args = OptionConfig(generics){
-                    .name = build_args.name,
+                const generics = bgen.flag_gen();
+                var args = OptionConfig(generics){
+                    .name = config.name,
+                    //
                     .short_tag = null,
                     .long_tag = null,
-                    .env_var = env_var,
-                    .description = build_args.description,
-                    .value_count = .{ .fixed = 0 },
-                    .default = build_args.default,
-                    .converter = build_args.converter,
-                    .eager = build_args.eager,
-                    .required = build_args.required,
-                    .global = build_args.global,
-                    .multi = build_args.multi,
-                    .secret = build_args.secret,
-                    .exposed = build_args.exposed,
+                    .env_var = null,
+                    //
+                    .description = config.description,
+                    .default = config.default,
+                    .converter = config.converter,
+                    //
+                    .eager = config.eager,
+                    .required = config.required,
+                    .global = config.global,
+                    //
+                    .exposed = config.exposed,
+                    .secret = config.secret,
+                    .nice_type_name = "flag",
                 };
 
-                self.param_spec.add(make_option(generics, args));
+                if (config.truthy) |truthy_pair| {
+                    if (truthy_pair.short_tag == null and truthy_pair.long_tag == null) {
+                        @compileError(
+                            "flag " ++
+                                config.name ++
+                                " truthy pair must have at least short or long tags set",
+                        );
+                    }
+
+                    args.short_tag = truthy_pair.short_tag;
+                    args.long_tag = truthy_pair.long_tag;
+                    args.flag_bias = .truthy;
+
+                    self.param_spec.add(make_option(generics, args));
+                }
+
+                if (config.falsy) |falsy_pair| {
+                    if (falsy_pair.short_tag == null and falsy_pair.long_tag == null) {
+                        @compileError(
+                            "flag " ++
+                                config.name ++
+                                " falsy pair must have at least short or long tags set",
+                        );
+                    }
+
+                    args.short_tag = falsy_pair.short_tag;
+                    args.long_tag = falsy_pair.long_tag;
+                    args.flag_bias = .falsy;
+
+                    self.param_spec.add(make_option(generics, args));
+                }
+
+                if (config.env_var) |env_var| {
+                    args.short_tag = null;
+                    args.long_tag = null;
+                    args.env_var = env_var;
+                    args.flag_bias = .unbiased;
+
+                    self.param_spec.add(make_option(generics, args));
+                }
             }
         }
 
@@ -452,7 +503,7 @@ fn CommandBuilder(comptime ContextType: type) type {
         }
 
         pub fn CallbackSignature(comptime self: @This()) type {
-            return *const fn (ContextType, self.Output()) anyerror!void;
+            return *const fn (*UserContext, self.Output()) anyerror!void;
         }
 
         pub fn Output(comptime self: @This()) type {
@@ -471,17 +522,16 @@ fn CommandBuilder(comptime ContextType: type) type {
                     const PType = @TypeOf(param);
                     if (PType.is_flag) {
                         var peek = idx + 1;
-                        var bais_seen: [ncmeta.enum_length(FlagBias)]bool = [_]bool{false} ** ncmeta.enum_length(FlagBias);
-                        bais_seen[@enumToInt(PType.flag_bias)] = true;
+                        var bias_seen: [ncmeta.enum_length(FlagBias)]bool = [_]bool{false} ** ncmeta.enum_length(FlagBias);
+                        bias_seen[@enumToInt(param.flag_bias)] = true;
                         while (peek < spec.len) : (peek += 1) {
                             const peek_param = spec[peek];
-                            const PeekType = @TypeOf(peek_param);
 
-                            if (PeekType.is_flag and std.mem.eql(u8, param.name, peek_param.name)) {
-                                if (bais_seen[@enumToInt(PeekType.flag_bias)] == true) {
+                            if (@TypeOf(peek_param).is_flag and std.mem.eql(u8, param.name, peek_param.name)) {
+                                if (bias_seen[@enumToInt(peek_param.flag_bias)] == true) {
                                     @compileError("redundant flag!!!! " ++ param.name);
                                 } else {
-                                    bais_seen[@enumToInt(PeekType.flag_bias)] = true;
+                                    bias_seen[@enumToInt(peek_param.flag_bias)] = true;
                                 }
                                 flag_skip += 1;
                             } else {
@@ -494,9 +544,9 @@ fn CommandBuilder(comptime ContextType: type) type {
                     // the optional wrapper is an interesting idea for required
                     // fields. I do not foresee this greatly increasing complexity here.
                     const FieldType = if (param.required)
-                        param.ResultType()
+                        PType.G.ConvertedType()
                     else
-                        ?param.ResultType();
+                        ?PType.G.ConvertedType();
 
                     // the wacky comptime slice extension hack
                     fields = &(@as([fields.len]StructField, fields[0..fields.len].*) ++ [1]StructField{.{
@@ -532,17 +582,16 @@ fn CommandBuilder(comptime ContextType: type) type {
                     const PType = @TypeOf(param);
                     if (PType.is_flag) {
                         var peek = idx + 1;
-                        var bais_seen: [ncmeta.enum_length(FlagBias)]bool = [_]bool{false} ** ncmeta.enum_length(FlagBias);
-                        bais_seen[@enumToInt(PType.flag_bias)] = true;
+                        var bias_seen: [ncmeta.enum_length(FlagBias)]bool = [_]bool{false} ** ncmeta.enum_length(FlagBias);
+                        bias_seen[@enumToInt(param.flag_bias)] = true;
                         while (peek < spec.len) : (peek += 1) {
                             const peek_param = spec[peek];
-                            const PeekType = @TypeOf(peek_param);
 
-                            if (PeekType.is_flag and std.mem.eql(u8, param.name, peek_param.name)) {
-                                if (bais_seen[@enumToInt(PeekType.flag_bias)] == true) {
+                            if (@TypeOf(peek_param).is_flag and std.mem.eql(u8, param.name, peek_param.name)) {
+                                if (bias_seen[@enumToInt(peek_param.flag_bias)] == true) {
                                     @compileError("redundant flag!!!! " ++ param.name);
                                 } else {
-                                    bais_seen[@enumToInt(PeekType.flag_bias)] = true;
+                                    bias_seen[@enumToInt(peek_param.flag_bias)] = true;
                                 }
                                 flag_skip += 1;
                             } else {
@@ -551,24 +600,21 @@ fn CommandBuilder(comptime ContextType: type) type {
                         }
                     }
 
-                    // This needs to be reconciled with options that take many
-                    // arguments. We could make all of these be ArrayLists of string
-                    // slices instead... but that makes the parsing code much more allocation heavy.
-                    // The problem is essentially that `--long=multi,value` and `--long multi value`
-                    // evaluate to a different number of strings for the same number of arguments.
-
-                    const FieldType = switch (param.value_count) {
-                        .fixed => |val| switch (val) {
-                            0, 1 => []const u8,
-                            else => std.ArrayList([]const u8),
-                        },
-                        else => std.ArrayList([]const u8),
-                    };
+                    const FieldType = if (PType.value_count == .count)
+                        PType.G.IntermediateType()
+                    else
+                        ?PType.G.IntermediateType();
 
                     fields = &(@as([fields.len]StructField, fields[0..fields.len].*) ++ [1]StructField{.{
                         .name = param.name,
-                        .type = ?FieldType,
-                        .default_value = @ptrCast(?*const anyopaque, &@as(?[]const u8, null)),
+                        .type = FieldType,
+                        .default_value = @ptrCast(
+                            ?*const anyopaque,
+                            &@as(
+                                FieldType,
+                                if (PType.value_count == .count) 0 else null,
+                            ),
+                        ),
                         .is_comptime = false,
                         .alignment = @alignOf(?[]const u8),
                     }});
@@ -593,35 +639,49 @@ fn CommandBuilder(comptime ContextType: type) type {
     };
 }
 
-fn push_unparsed_multi(comptime T: type, comptime field: []const u8, intermediate: *T, value: []const u8, alloc: std.mem.Allocator) !void {
-    if (@field(intermediate, field) == null) {
-        @field(intermediate, field) = std.ArrayList([]const u8).init(alloc);
-    }
-
-    try @field(intermediate, field).?.append(value);
-}
-
-fn push_unparsed_value(comptime T: type, comptime param: anytype, intermediate: *T, value: []const u8, alloc: std.mem.Allocator) ParseError!void {
-    switch (comptime param.value_count) {
-        .fixed => |val| switch (val) {
-            0, 1 => @field(intermediate, param.name) = value,
-            else => push_unparsed_multi(T, param.name, intermediate, value, alloc) catch return ParseError.UnexpectedFailure,
-        },
-        else => push_unparsed_multi(T, param.name, intermediate, value, alloc) catch return ParseError.UnexpectedFailure,
-    }
-}
-
-fn ParserInterface(comptime ContextType: type) type {
+// This is a slightly annoying hack to work around the fact that there's no way to
+// provide a field value conditionally.
+fn ParserInterfaceImpl(comptime Interface: type) type {
     return struct {
-        ctx: *anyopaque,
-        methods: *const Interface,
+        pub fn execute(self: Interface) anyerror!void {
+            return try self.methods.execute(self.ctx, self.context);
+        }
+    };
+}
 
-        const Interface = struct {
-            execute: *const fn (ctx: *anyopaque, context: ContextType) anyerror!void,
+fn ParserInterface(comptime UserContext: type) type {
+    const InterfaceVtable = struct {
+        execute: *const fn (ctx: *anyopaque, context: *UserContext) anyerror!void,
+    };
+
+    // we can actually bind the user context object in the interface, since
+    // it is exclusively parameterized around the context type.
+    return if (@typeInfo(UserContext) == .Void)
+        struct {
+            ctx: *anyopaque,
+            context: *UserContext = @constCast(&void{}),
+            methods: *const InterfaceVtable,
+
+            pub usingnamespace ParserInterfaceImpl(@This());
+        }
+    else
+        struct {
+            ctx: *anyopaque,
+            context: *UserContext,
+            methods: *const InterfaceVtable,
+
+            pub usingnamespace ParserInterfaceImpl(@This());
         };
+}
 
-        pub fn execute(self: @This(), context: ContextType) anyerror!void {
-            return try self.methods.execute(self.ctx, context);
+fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
+    return if (@typeInfo(UserContext) == .Void) struct {
+        pub fn interface(self: *ParserType) ParserInterface(UserContext) {
+            return .{ .ctx = self, .methods = &.{ .execute = ParserType.wrap_execute } };
+        }
+    } else struct {
+        pub fn interface(self: *ParserType, context: *UserContext) ParserInterface(UserContext) {
+            return .{ .ctx = self, .context = context, .methods = &.{ .execute = ParserType.wrap_execute } };
         }
     };
 }
@@ -629,11 +689,11 @@ fn ParserInterface(comptime ContextType: type) type {
 // the parser is generated by the bind method of the CommandBuilder, so we can
 // be extremely type-sloppy here, which simplifies the signature.
 fn Parser(comptime command: anytype, comptime callback: anytype) type {
-    return struct {
-        const ContextType = @TypeOf(command).UserContextType;
-        const Intermediate = command.Intermediate();
-        const Output = command.Output();
+    const UserContext = @TypeOf(command).UserContextType;
+    const Intermediate = command.Intermediate();
+    const Output = command.Output();
 
+    return struct {
         intermediate: Intermediate = .{},
         output: Output = undefined,
         consumed_args: u32 = 0,
@@ -645,16 +705,16 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
         //     self.subcommands
         // }
 
-        pub fn interface(self: *@This()) ParserInterface(ContextType) {
-            return .{ .ctx = self, .methods = &.{ .execute = wrap_execute } };
-        }
+        // This is a slightly annoying hack to work around the fact that there's no way to
+        // provide a method signature conditionally.
+        pub usingnamespace InterfaceGen(@This(), UserContext);
 
-        fn wrap_execute(ctx: *anyopaque, context: ContextType) anyerror!void {
+        fn wrap_execute(ctx: *anyopaque, context: *UserContext) anyerror!void {
             const self = @ptrCast(*@This(), @alignCast(@alignOf(@This()), ctx));
             return try self.execute(context);
         }
 
-        pub fn execute(self: *@This(), context: ContextType) anyerror!void {
+        pub fn execute(self: *@This(), context: *UserContext) anyerror!void {
             const args = try std.process.argsAlloc(self.allocator);
             defer std.process.argsFree(self.allocator, args);
             var env = try std.process.getEnvMap(self.allocator);
@@ -673,17 +733,24 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
             inline for (@typeInfo(@TypeOf(self.intermediate)).Struct.fields) |field| {
                 // @compileLog(@typeName(field.type));
-                if (comptime std.mem.startsWith(u8, @typeName(field.type), "?array_list.ArrayList")) {
-                    if (@field(self.intermediate, field.name)) |list| {
-                        std.debug.print("{s}: [\n", .{field.name});
-                        for (list.items) |item| std.debug.print("    {s},\n", .{item});
-                        std.debug.print("]\n", .{});
-                    } else {
-                        std.debug.print("{s}: null\n", .{field.name});
-                    }
+                if (@field(self.intermediate, field.name) == null) {
+                    std.debug.print("{s}: null,\n", .{field.name});
                 } else {
-                    std.debug.print("{s}: {?s}\n", .{ field.name, @field(self.intermediate, field.name) });
+                    std.debug.print("{s}: ", .{field.name});
+                    self.print_value(@field(self.intermediate, field.name).?, "");
                 }
+            }
+        }
+
+        fn print_value(self: @This(), value: anytype, comptime indent: []const u8) void {
+            if (comptime @hasField(@TypeOf(value), "items")) {
+                std.debug.print("{s}[\n", .{indent});
+                for (value.items) |item| {
+                    self.print_value(item, indent ++ "   ");
+                }
+                std.debug.print("{s}]\n", .{indent});
+            } else {
+                std.debug.print("{s}{s}\n", .{ indent, value });
             }
         }
 
@@ -769,32 +836,14 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 comptime if (PType.param_type != .Nominal or param.long_tag == null) continue;
                 const tag = param.long_tag.?;
 
-                if (comptime PType.is_flag) {
-                    if (std.mem.eql(u8, arg, tag)) {
-                        try self.apply_param_values(param, comptime PType.flag_bias.string(), argit);
-                        return;
-                    }
-                } else {
-                    if (std.mem.startsWith(u8, arg, tag)) match: {
-                        // TODO: in case of --long=value we should split value
-                        // on comma, so e.g. --long=one,two which is kinda docker-style.
-                        // This adds complexity. Note that --long=one,two will also
-                        // parse as a single value because we take a different
-                        // codepath. In that case presumably the converter will choke if
-                        // it needs to. Ideally the multi-value stuff would all be
-                        // shoved into the converter layer, but we can't do that due to
-                        // needing to consume multiple argv values in some cases. This
-                        // could be an opportunity to become opinionated about CLI flag
-                        // styles, but I will not do that for the time being.
-                        if (arg.len == tag.len) {
-                            const next = argit.next() orelse return ParseError.ValueMissing;
-                            try self.apply_param_values(param, next, argit);
-                        } else if (arg[tag.len] == '=') {
-                            try self.apply_fused_values(param, arg[tag.len + 1 ..]);
-                        } else break :match;
+                if (std.mem.startsWith(u8, arg, tag)) match: {
+                    if (arg.len == tag.len) {
+                        try self.apply_param_values(param, argit, false);
+                    } else if (arg[tag.len] == '=') {
+                        try self.apply_fused_values(param, arg[tag.len + 1 ..]);
+                    } else break :match;
 
-                        return;
-                    }
+                    return;
                 }
             }
 
@@ -813,18 +862,13 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 comptime if (PType.param_type != .Nominal or param.short_tag == null) continue;
                 const tag = param.short_tag.?;
 
-                if (comptime PType.is_flag) {
-                    if (arg == tag[1]) {
-                        try self.apply_param_values(param, comptime PType.flag_bias.string(), argit);
-                        return;
-                    }
-                } else {
-                    if (arg == tag[1]) {
-                        if (remaining > 0) return ParseError.FusedShortTagValueMissing;
-                        const next = argit.next() orelse return ParseError.ValueMissing;
-                        try self.apply_param_values(param, next, argit);
-                        return;
-                    }
+                if (arg == tag[1]) {
+                    if (comptime !PType.is_flag)
+                        if (remaining > 0)
+                            return ParseError.FusedShortTagValueMissing;
+
+                    try self.apply_param_values(param, argit, false);
+                    return;
                 }
             }
 
@@ -836,12 +880,15 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
             arg: []const u8,
             argit: *ncmeta.SliceIterator([][:0]u8),
         ) ParseError!void {
+            _ = arg;
+
             comptime var arg_index: u32 = 0;
             inline for (comptime command.generate()) |param| {
                 comptime if (@TypeOf(param).param_type != .Ordinal) continue;
 
                 if (self.consumed_args == arg_index) {
-                    try self.apply_param_values(param, arg, argit);
+                    argit.rewind();
+                    try self.apply_param_values(param, argit, false);
                     self.consumed_args += 1;
                     return;
                 }
@@ -852,76 +899,73 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
             // look for subcommands now
         }
 
-        inline fn apply_param_values(self: *@This(), comptime param: anytype, value: []const u8, argit: *ncmeta.SliceIterator([][:0]u8)) ParseError!void {
-            try push_unparsed_value(Intermediate, param, &self.intermediate, value, self.allocator);
-            switch (comptime param.value_count) {
+        inline fn push_intermediate_value(
+            self: *@This(),
+            comptime param: anytype,
+            value: param.IntermediateValue(),
+        ) ParseError!void {
+            if (comptime @TypeOf(param).G.multi) {
+                if (@field(self.intermediate, param.name) == null) {
+                    @field(self.intermediate, param.name) = param.IntermediateType().init(self.allocator);
+                }
+                @field(self.intermediate, param.name).?.append(value) catch return ParseError.UnexpectedFailure;
+            } else if (comptime @TypeOf(param).G.nonscalar()) {
+                if (@field(self.intermediate, param.name)) |list| list.deinit();
+                @field(self.intermediate, param.name) = value;
+            } else {
+                @field(self.intermediate, param.name) = value;
+            }
+        }
+
+        inline fn apply_param_values(
+            self: *@This(),
+            comptime param: anytype,
+            argit: anytype,
+            bounded: bool,
+        ) ParseError!void {
+            switch (comptime @TypeOf(param).G.value_count) {
+                .flag => try self.push_intermediate_value(param, comptime param.flag_bias.string()),
+                .count => @field(self.intermediate, param.name) += 1,
                 .fixed => |count| switch (count) {
-                    0, 1 => return,
+                    0 => return ParseError.ExtraValue,
+                    1 => try self.push_intermediate_value(param, argit.next() orelse return ParseError.MissingValue),
                     else => |total| {
-                        var consumed: u32 = 1;
+                        var list = std.ArrayList([]const u8).initCapacity(self.allocator, total) catch
+                            return ParseError.UnexpectedFailure;
+
+                        var consumed: u32 = 0;
                         while (consumed < total) : (consumed += 1) {
-                            const next = argit.next() orelse return ParseError.ValueMissing;
-                            try push_unparsed_value(
-                                Intermediate,
-                                param,
-                                &self.intermediate,
-                                next,
-                                self.allocator,
-                            );
+                            const next = argit.next() orelse return ParseError.MissingValue;
+                            list.append(next) catch return ParseError.UnexpectedFailure;
                         }
+                        if (bounded and argit.next() != null) return ParseError.ExtraValue;
+
+                        try self.push_intermediate_value(param, list);
                     },
                 },
                 .greedy => {
-                    while (argit.next()) |next| {
-                        try push_unparsed_value(
-                            Intermediate,
-                            param,
-                            &self.intermediate,
-                            next,
-                            self.allocator,
-                        );
-                    }
+                    var list = std.ArrayList([]const u8).init(self.allocator);
+                    while (argit.next()) |next| list.append(next) catch return ParseError.UnexpectedFailure;
+                    try self.push_intermediate_value(param, list);
                 },
             }
         }
 
-        inline fn apply_fused_values(self: *@This(), comptime param: anytype, value: []const u8) ParseError!void {
-            switch (comptime param.value_count) {
-                .fixed => |count| switch (count) {
-                    0 => return ParseError.UnexpectedValue,
-                    1 => try push_unparsed_value(Intermediate, param, &self.intermediate, value, self.allocator),
-                    else => |total| {
-                        var seen: u32 = 0;
-                        var iterator = std.mem.split(u8, value, ",");
-                        while (iterator.next()) |next| {
-                            try push_unparsed_value(Intermediate, param, &self.intermediate, next, self.allocator);
-                            seen += 1;
-                        }
-                        if (seen < total) return ParseError.ValueMissing else if (seen > total) return ParseError.UnexpectedValue;
-                    },
-                },
-                .greedy => {
-                    // huh. this is just an unchecked version of the fixed-many case.
-                    var iterator = std.mem.split(u8, value, ",");
-                    while (iterator.next()) |next| {
-                        try push_unparsed_value(Intermediate, param, &self.intermediate, next, self.allocator);
-                    }
-                },
-            }
+        inline fn apply_fused_values(
+            self: *@This(),
+            comptime param: anytype,
+            value: []const u8,
+        ) ParseError!void {
+            var iter = std.mem.split(u8, value, ",");
+            return try self.apply_param_values(param, &iter, true);
         }
 
         fn read_environment(self: *@This(), env: std.process.EnvMap) !void {
             inline for (comptime command.generate()) |param| {
                 if (comptime param.env_var) |env_var| {
+                    if (@field(self.intermediate, param.name) != null) return;
                     const val = env.get(env_var) orelse return;
-
-                    push_unparsed_value(
-                        Intermediate,
-                        param,
-                        &self.intermediate,
-                        val,
-                        self.allocator,
-                    ) catch return ParseError.UnexpectedFailure;
+                    try self.apply_fused_values(param, val);
                     return;
                 }
             }
@@ -933,46 +977,75 @@ fn HelpBuilder(comptime command: anytype) type {
     _ = command;
 }
 
-pub fn command_builder(comptime ContextType: type) CommandBuilder(ContextType) {
-    return CommandBuilder(ContextType){};
+pub fn command_builder(comptime UserContext: type) CommandBuilder(UserContext) {
+    return CommandBuilder(UserContext){};
 }
 
 const Choice = enum { first, second };
 
+fn fixed_output(_: u32, _: std.ArrayList([]const u8)) converters.ConversionError!u8 {
+    return 0;
+}
+
+fn greedy_output(_: u32, input: std.ArrayList([]const u8)) converters.ConversionError!std.ArrayList([]const u8) {
+    var output = std.ArrayList([]const u8).initCapacity(input.allocator, 1) catch
+        return converters.ConversionError.BadValue;
+
+    output.appendAssumeCapacity("hello");
+    return output;
+}
+
 const cli = cmd: {
-    var cmd = command_builder(void);
-    cmd.add_option(u8, .{
+    var cmd = command_builder(u32);
+    cmd.add_option(.{
+        .OutputType = u8,
+        .value_count = .{ .fixed = 2 },
+    }, .{
         .name = "test",
         .short_tag = "-t",
         .long_tag = "--test",
         .env_var = "NOCLIP_TEST",
-        .value_count = .{ .fixed = 2 },
+        .converter = fixed_output,
     });
-    cmd.add_option(Choice, .{
+    cmd.add_option(.{ .OutputType = Choice }, .{
         .name = "choice",
         .short_tag = "-c",
         .long_tag = "--choice",
         .env_var = "NOCLIP_CHOICE",
     });
-    cmd.add_flag(.{
+    // cmd.add_option(.{ .OutputType = u8, .multi = true }, .{
+    //     .name = "multi",
+    //     .short_tag = "-m",
+    //     .long_tag = "--multi",
+    //     .env_var = "NOCLIP_MULTI",
+    // });
+    cmd.add_flag(.{}, .{
         .name = "flag",
         .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
         .falsy = .{ .long_tag = "--no-flag" },
         .env_var = "NOCLIP_FLAG",
     });
-    cmd.add_argument([]const u8, .{
-        .name = "arg",
-        // .value_count = .{ .fixed = 3 },
+    // cmd.add_flag(.{ .multi = true }, .{
+    //     .name = "multiflag",
+    //     .truthy = .{ .short_tag = "-M" },
+    //     .env_var = "NOCLIP_MULTIFLAG",
+    //     .multi = true,
+    // });
+    cmd.add_argument(.{
+        .OutputType = []const u8,
         .value_count = .greedy,
+    }, .{
+        .name = "arg",
+        .converter = greedy_output,
     });
 
     break :cmd cmd;
 };
 
-fn cli_handler(_: void, result: cli.Output()) !void {
+fn cli_handler(context: *u32, result: cli.Output()) !void {
     _ = result;
 
-    std.debug.print("callback is working\n", .{});
+    std.debug.print("callback is working {d}\n", .{context.*});
 }
 
 pub fn main() !void {
@@ -981,6 +1054,7 @@ pub fn main() !void {
     const allocator = arena.allocator();
 
     var parser = cli.bind(cli_handler, allocator);
-    const iface = parser.interface();
-    try iface.execute({});
+    var context: u32 = 2;
+    const iface = parser.interface(&context);
+    try iface.execute();
 }

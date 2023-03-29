@@ -8,11 +8,18 @@ pub const ConversionError = error{
 };
 
 pub fn ConverterSignature(comptime gen: ParameterGenerics) type {
-    return *const fn (gen.ContextType, []const u8) ConversionError!gen.ResultType();
+    return *const fn (gen.UserContext, gen.IntermediateType()) ConversionError!gen.ConvertedType();
+}
+
+pub fn FlagConverterSignature(comptime UserContext: type, comptime multi: bool) type {
+    comptime if (multi)
+        return *const fn (UserContext, std.ArrayList([]const u8)) ConversionError!std.ArrayList(bool)
+    else
+        return *const fn (UserContext, []const u8) ConversionError!bool;
 }
 
 pub fn default_converter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
-    return switch (@typeInfo(gen.ResultType())) {
+    return switch (@typeInfo(gen.OutputType)) {
         .Bool => flag_converter(gen),
         .Int => int_converter(gen),
         .Pointer => |info| if (info.size == .Slice and info.child == u8)
@@ -24,9 +31,23 @@ pub fn default_converter(comptime gen: ParameterGenerics) ?ConverterSignature(ge
     };
 }
 
+// fn multi_converter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
+//     const converter = default_converter(gen) orelse @compileError("no default converter");
+
+//     return struct {
+//         pub fn handler(_: UserContext, input: std.ArrayList([]const u8)) ConversionError!std.ArrayList(OutputType) {
+//             var output = std.ArrayList(OutputType).initCapacity(input.allocator, input.items.len) catch return ConversionError.BadValue;
+
+//             for (input.items) |item| {
+//                 output.appendAssumeCapacity()
+//             }
+//         }
+//     }.handler;
+// }
+
 fn flag_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     return struct {
-        pub fn handler(_: gen.ContextType, input: []const u8) ConversionError!bool {
+        pub fn handler(_: gen.UserContext, input: []const u8) ConversionError!bool {
             // treat an empty string as falsy
             if (input.len == 0) return false;
 
@@ -46,29 +67,29 @@ fn flag_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
 
 fn string_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     return struct {
-        pub fn handler(_: gen.ContextType, value: []const u8) ConversionError![]const u8 {
+        pub fn handler(_: gen.UserContext, value: []const u8) ConversionError![]const u8 {
             return value;
         }
     }.handler;
 }
 
 fn int_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
-    const IntType = gen.ResultType();
+    const IntType = gen.OutputType;
     comptime std.debug.assert(@typeInfo(IntType) == .Int);
 
     return struct {
-        pub fn handler(_: gen.ContextType, value: []const u8) ConversionError!IntType {
+        pub fn handler(_: gen.UserContext, value: []const u8) ConversionError!IntType {
             return std.fmt.parseInt(IntType, value, 0) catch return ConversionError.BadValue;
         }
     }.handler;
 }
 
 fn choice_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
-    const EnumType = gen.ResultType();
+    const EnumType = gen.OutputType;
 
     return struct {
-        pub fn handler(_: gen.ContextType, value: []const u8) ConversionError!EnumType {
-            return std.meta.stringToEnum(gen.ResultType(), value) orelse ConversionError.BadValue;
+        pub fn handler(_: gen.UserContext, value: []const u8) ConversionError!EnumType {
+            return std.meta.stringToEnum(gen.ConvertedType(), value) orelse ConversionError.BadValue;
         }
     }.handler;
 }
