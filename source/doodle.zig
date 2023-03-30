@@ -6,15 +6,7 @@ const ncmeta = @import("./meta.zig");
 
 const ConverterSignature = converters.ConverterSignature;
 
-const Errors = error{
-    BadConfiguration,
-    MissingTag,
-    ArgumentWithTags,
-    ArgumentWithEnvVar,
-    MissingDefaultConverter,
-};
-
-const ParseError = error{
+pub const ParseError = error{
     UnexpectedFailure,
     EmptyArgs,
     MissingValue,
@@ -22,6 +14,8 @@ const ParseError = error{
     FusedShortTagValueMissing,
     UnknownLongTagParameter,
     UnknownShortTagParameter,
+    RequiredMissing,
+    ConversionFailed,
 };
 
 const ParameterType = enum {
@@ -34,14 +28,11 @@ const ParameterType = enum {
 // any number of fixed args and be well-defined. `mv` is a classic example
 // of this pattern. But putting that logic in the parser seems to add a lot of
 // complexity for little gain. The `mv` use case can be much more easily handled
-// with a greedy value and then splitting in the value handler.
+// with a multi value and then splitting in the value handler.
 const ValueCount = union(enum) {
     flag: void,
     count: void,
     fixed: u32,
-    // variable value delimited by a character, e.g. `find -exec +` style
-    // delimited: []const u8
-    greedy: void,
 };
 
 const FlagBias = enum {
@@ -67,6 +58,27 @@ pub const ParameterGenerics = struct {
     /// values will be appended when it is encountered. If false, only the
     /// final encountered instance will be used.
     multi: bool,
+    // since we now use multi in place of greedy values for simplicity, we may want to
+    // convert this an enum or add an additional flag to distinguish between the
+    // many-to-many and the many-to-one cases.
+
+    pub fn fixed_value_count(comptime OutputType: type, comptime value_count: ValueCount) ValueCount {
+        return comptime if (value_count == .fixed)
+            switch (@typeInfo(OutputType)) {
+                .Struct => |info| .{ .fixed = info.fields.len },
+                .Array => |info| .{ .fixed = info.len },
+                // TODO: this is a bit sloppy, but it can be refined later.
+                // .Pointer covers slices, which may be a many-to-many conversion.
+                .Pointer => value_count,
+                else => .{ .fixed = 1 },
+            }
+        else
+            value_count;
+    }
+
+    pub fn clone_without_multi(comptime self: @This()) @This() {
+        return .{ .UserContext = self.UserContext, .OutputType = self.OutputType, .param_type = self.param_type, .value_count = self.value_count, .multi = false };
+    }
 
     pub fn has_context(comptime self: @This()) bool {
         return comptime self.UserContext != void;
@@ -75,7 +87,7 @@ pub const ParameterGenerics = struct {
     pub fn is_flag(comptime self: @This()) bool {
         return comptime switch (self.value_count) {
             .flag, .count => true,
-            .fixed, .greedy => false,
+            .fixed => false,
         };
     }
 
@@ -110,7 +122,6 @@ pub const ParameterGenerics = struct {
                 // case, the output type must be decoupled from the input type.
                 else => self.OutputType,
             },
-            .greedy => std.ArrayList(self.OutputType),
         };
     }
 
@@ -123,7 +134,6 @@ pub const ParameterGenerics = struct {
                 1 => []const u8,
                 else => std.ArrayList([]const u8),
             },
-            .greedy => return std.ArrayList([]const u8),
         };
     }
 
@@ -135,7 +145,6 @@ pub const ParameterGenerics = struct {
                 1 => false,
                 else => true,
             },
-            .greedy => true,
         };
     }
 };
@@ -265,7 +274,11 @@ fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionConfig
     // whereas the OptionType is an instance of an object that has been
     // validated.
     const converter = opts.converter orelse
-        (converters.default_converter(generics) orelse @compileError("no converter provided for " ++ opts.name ++ "and no default exists"));
+        (converters.default_converter(generics) orelse @compileError(
+        "no converter provided for " ++
+            opts.name ++
+            "and no default exists",
+    ));
 
     return OptionType(generics){
         .name = opts.name,
@@ -298,11 +311,16 @@ fn make_argument(
             @compileError("argument " ++ opts.name ++ " must not have a long or short tag or an env var");
         }
 
-        const converter = opts.converter orelse
-            (converters.default_converter(generics) orelse @compileError("no converter provided for " ++ opts.name ++ "and no default exists"));
+        if (opts.global) {
+            @compileError("argument " ++ opts.name ++ " cannot be global");
+        }
 
-        if (generics.multi == true)
-            @compileError("argument " ++ opts.name ++ " cannot be multi");
+        const converter = opts.converter orelse
+            (converters.default_converter(generics) orelse @compileError(
+            "no converter provided for " ++
+                opts.name ++
+                "and no default exists",
+        ));
 
         return OptionType(generics){
             .name = opts.name,
@@ -342,8 +360,8 @@ fn BuilderGenerics(comptime UserContext: type) type {
                 .UserContext = UserContext,
                 .OutputType = self.OutputType,
                 .param_type = .Ordinal,
-                .value_count = self.value_count,
-                .multi = false,
+                .value_count = ParameterGenerics.fixed_value_count(self.OutputType, self.value_count),
+                .multi = self.multi,
             };
         }
 
@@ -355,7 +373,7 @@ fn BuilderGenerics(comptime UserContext: type) type {
                 .UserContext = UserContext,
                 .OutputType = self.OutputType,
                 .param_type = .Nominal,
-                .value_count = self.value_count,
+                .value_count = ParameterGenerics.fixed_value_count(self.OutputType, self.value_count),
                 .multi = self.multi,
             };
         }
@@ -488,6 +506,7 @@ fn CommandBuilder(comptime UserContext: type) type {
                 }
 
                 if (config.env_var) |env_var| {
+                    // @compileLog(env_var);
                     args.short_tag = null;
                     args.long_tag = null;
                     args.env_var = env_var;
@@ -692,6 +711,7 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
     const UserContext = @TypeOf(command).UserContextType;
     const Intermediate = command.Intermediate();
     const Output = command.Output();
+    const parameters = command.generate();
 
     return struct {
         intermediate: Intermediate = .{},
@@ -724,11 +744,8 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
             self.progname = args[0];
             try self.parse(args[1..]);
-            // run eager conversions
-            // try self.convert_eager()
-            // run normal conversions
-            // try self.convert()
-            // execute callback:
+            try self.read_environment(env);
+            try self.convert(context);
             try callback(context, self.output);
 
             inline for (@typeInfo(@TypeOf(self.intermediate)).Struct.fields) |field| {
@@ -758,14 +775,6 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
             self: *@This(),
             args: [][:0]u8,
         ) anyerror!void {
-            // actually: don't consider env variables until performing conversions. This
-            // is the most reasonable way to treat the environment as a
-            // separate "namespace" for e.g. multi options. we only want to use
-            // environment values if there is nothing specified on the CLI, which cannot
-            // be determined until the CLI parsing is complete.
-
-            // try self.read_environment(env);
-
             // run pre-parse pass if we have any global parameters
             // try self.preparse()
 
@@ -830,7 +839,7 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
             arg: []const u8,
             argit: *ncmeta.SliceIterator([][:0]u8),
         ) ParseError!void {
-            inline for (comptime command.generate()) |param| {
+            inline for (comptime parameters) |param| {
                 const PType = @TypeOf(param);
                 // removing the comptime here causes the compiler to die
                 comptime if (PType.param_type != .Nominal or param.long_tag == null) continue;
@@ -856,7 +865,7 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
             remaining: usize,
             argit: *ncmeta.SliceIterator([][:0]u8),
         ) ParseError!void {
-            inline for (comptime command.generate()) |param| {
+            inline for (comptime parameters) |param| {
                 const PType = @TypeOf(param);
                 // removing the comptime here causes the compiler to die
                 comptime if (PType.param_type != .Nominal or param.short_tag == null) continue;
@@ -883,12 +892,16 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
             _ = arg;
 
             comptime var arg_index: u32 = 0;
-            inline for (comptime command.generate()) |param| {
+            inline for (comptime parameters) |param| {
                 comptime if (@TypeOf(param).param_type != .Ordinal) continue;
 
                 if (self.consumed_args == arg_index) {
                     argit.rewind();
-                    try self.apply_param_values(param, argit, false);
+                    if (comptime @TypeOf(param).G.multi) {
+                        while (argit.peek()) |_| try self.apply_param_values(param, argit, false);
+                    } else {
+                        try self.apply_param_values(param, argit, false);
+                    }
                     self.consumed_args += 1;
                     return;
                 }
@@ -902,11 +915,14 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
         inline fn push_intermediate_value(
             self: *@This(),
             comptime param: anytype,
+            // @TypeOf(param).G.IntermediateValue() should work but appears to trigger a
+            //  compiler bug: expected pointer, found 'u1'
             value: param.IntermediateValue(),
         ) ParseError!void {
-            if (comptime @TypeOf(param).G.multi) {
+            const gen = @TypeOf(param).G;
+            if (comptime gen.multi) {
                 if (@field(self.intermediate, param.name) == null) {
-                    @field(self.intermediate, param.name) = param.IntermediateType().init(self.allocator);
+                    @field(self.intermediate, param.name) = gen.IntermediateType().init(self.allocator);
                 }
                 @field(self.intermediate, param.name).?.append(value) catch return ParseError.UnexpectedFailure;
             } else if (comptime @TypeOf(param).G.nonscalar()) {
@@ -943,11 +959,6 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
                         try self.push_intermediate_value(param, list);
                     },
                 },
-                .greedy => {
-                    var list = std.ArrayList([]const u8).init(self.allocator);
-                    while (argit.next()) |next| list.append(next) catch return ParseError.UnexpectedFailure;
-                    try self.push_intermediate_value(param, list);
-                },
             }
         }
 
@@ -961,11 +972,41 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
         }
 
         fn read_environment(self: *@This(), env: std.process.EnvMap) !void {
-            inline for (comptime command.generate()) |param| {
-                if (comptime param.env_var) |env_var| {
-                    if (@field(self.intermediate, param.name) != null) return;
-                    const val = env.get(env_var) orelse return;
-                    try self.apply_fused_values(param, val);
+            inline for (comptime parameters) |param| {
+                if (comptime param.env_var) |env_var| blk: {
+                    if (@field(self.intermediate, param.name) != null) break :blk;
+                    const val = env.get(env_var) orelse break :blk;
+                    if (comptime @TypeOf(param).G.value_count == .flag) {
+                        try self.push_intermediate_value(param, val);
+                    } else {
+                        try self.apply_fused_values(param, val);
+                    }
+                }
+            }
+        }
+
+        fn convert(self: *@This(), context: *UserContext) ParseError!void {
+            inline for (comptime parameters) |param| {
+                if (comptime param.eager) {
+                    try self.convert_param(param, context);
+                }
+            }
+
+            inline for (comptime parameters) |param| {
+                if (comptime !param.eager) {
+                    try self.convert_param(param, context);
+                }
+            }
+        }
+
+        fn convert_param(self: *@This(), comptime param: anytype, context: *UserContext) ParseError!void {
+            if (@field(self.intermediate, param.name)) |intermediate| {
+                @field(self.output, param.name) = try param.converter(context, intermediate);
+            } else {
+                if (comptime param.required) {
+                    return ParseError.RequiredMissing;
+                } else {
+                    @field(self.output, param.name) = null;
                     return;
                 }
             }
@@ -983,29 +1024,13 @@ pub fn command_builder(comptime UserContext: type) CommandBuilder(UserContext) {
 
 const Choice = enum { first, second };
 
-fn fixed_output(_: u32, _: std.ArrayList([]const u8)) converters.ConversionError!u8 {
-    return 0;
-}
-
-fn greedy_output(_: u32, input: std.ArrayList([]const u8)) converters.ConversionError!std.ArrayList([]const u8) {
-    var output = std.ArrayList([]const u8).initCapacity(input.allocator, 1) catch
-        return converters.ConversionError.BadValue;
-
-    output.appendAssumeCapacity("hello");
-    return output;
-}
-
 const cli = cmd: {
     var cmd = command_builder(u32);
-    cmd.add_option(.{
-        .OutputType = u8,
-        .value_count = .{ .fixed = 2 },
-    }, .{
+    cmd.add_option(.{ .OutputType = struct { u8, u8 } }, .{
         .name = "test",
         .short_tag = "-t",
         .long_tag = "--test",
         .env_var = "NOCLIP_TEST",
-        .converter = fixed_output,
     });
     cmd.add_option(.{ .OutputType = Choice }, .{
         .name = "choice",
@@ -1013,39 +1038,36 @@ const cli = cmd: {
         .long_tag = "--choice",
         .env_var = "NOCLIP_CHOICE",
     });
-    // cmd.add_option(.{ .OutputType = u8, .multi = true }, .{
-    //     .name = "multi",
-    //     .short_tag = "-m",
-    //     .long_tag = "--multi",
-    //     .env_var = "NOCLIP_MULTI",
-    // });
+    cmd.add_option(.{ .OutputType = u8, .multi = true }, .{
+        .name = "multi",
+        .short_tag = "-m",
+        .long_tag = "--multi",
+        .env_var = "NOCLIP_MULTI",
+    });
     cmd.add_flag(.{}, .{
         .name = "flag",
         .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
         .falsy = .{ .long_tag = "--no-flag" },
         .env_var = "NOCLIP_FLAG",
     });
-    // cmd.add_flag(.{ .multi = true }, .{
-    //     .name = "multiflag",
-    //     .truthy = .{ .short_tag = "-M" },
-    //     .env_var = "NOCLIP_MULTIFLAG",
-    //     .multi = true,
-    // });
-    cmd.add_argument(.{
-        .OutputType = []const u8,
-        .value_count = .greedy,
-    }, .{
+    cmd.add_flag(.{ .multi = true }, .{
+        .name = "multiflag",
+        .truthy = .{ .short_tag = "-M" },
+        .env_var = "NOCLIP_MULTIFLAG",
+    });
+    cmd.add_argument(.{ .OutputType = []const u8, .multi = true }, .{
         .name = "arg",
-        .converter = greedy_output,
     });
 
     break :cmd cmd;
 };
 
 fn cli_handler(context: *u32, result: cli.Output()) !void {
-    _ = result;
+    _ = context;
 
-    std.debug.print("callback is working {d}\n", .{context.*});
+    std.debug.print("callback is working {any}\n", .{result.multi.?.items});
+    std.debug.print("callback is working {any}\n", .{result.multiflag.?.items});
+    std.debug.print("callback is working {any}\n", .{result.choice});
 }
 
 pub fn main() !void {

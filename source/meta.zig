@@ -93,6 +93,22 @@ pub fn SliceIterator(comptime T: type) type {
     };
 }
 
+pub fn copy_struct(comptime T: type, source: T, field_overrides: anytype) T {
+    var result: T = undefined;
+
+    comptime inline for (@typeInfo(@TypeOf(field_overrides)).Struct.fields) |field| {
+        if (!@hasField(T, field.name)) @compileError("override contains bad field" ++ field);
+    };
+
+    inline for (comptime @typeInfo(T).Struct.fields) |field| {
+        if (comptime @hasField(@TypeOf(field_overrides), field.name))
+            @field(result, field.name) = @field(field_overrides, field.name)
+        else
+            @field(result, field.name) = @field(source, field.name);
+    }
+    return result;
+}
+
 /// Stores type-erased pointers to items in comptime extensible data structures,
 /// which allows e.g. assembling a tuple through multiple calls rather than all
 /// at once.
