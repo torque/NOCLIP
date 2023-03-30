@@ -653,54 +653,62 @@ fn CommandBuilder(comptime UserContext: type) type {
             comptime callback: self.CallbackSignature(),
             allocator: std.mem.Allocator,
         ) Parser(self, callback) {
-            return Parser(self, callback){ .allocator = allocator };
+            return Parser(self, callback){
+                .allocator = allocator,
+                .subcommands = std.hash_map.StringHashMap(ParserInterface).init(allocator),
+            };
         }
     };
 }
 
-// This is a slightly annoying hack to work around the fact that there's no way to
-// provide a field value conditionally.
-fn ParserInterfaceImpl(comptime Interface: type) type {
-    return struct {
-        pub fn execute(self: Interface) anyerror!void {
-            return try self.methods.execute(self.ctx, self.context);
-        }
-    };
-}
-
-fn ParserInterface(comptime UserContext: type) type {
-    const InterfaceVtable = struct {
-        execute: *const fn (ctx: *anyopaque, context: *UserContext) anyerror!void,
+const ParserInterface = struct {
+    const Vtable = struct {
+        execute: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!void,
+        parse: *const fn (parser: *anyopaque, context: *anyopaque, args: [][:0]u8, env: std.process.EnvMap) anyerror!void,
+        finish: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!void,
     };
 
-    // we can actually bind the user context object in the interface, since
-    // it is exclusively parameterized around the context type.
-    return if (@typeInfo(UserContext) == .Void)
-        struct {
-            ctx: *anyopaque,
-            context: *UserContext = @constCast(&void{}),
-            methods: *const InterfaceVtable,
+    parser: *anyopaque,
+    context: *anyopaque,
+    methods: *const Vtable,
 
-            pub usingnamespace ParserInterfaceImpl(@This());
-        }
-    else
-        struct {
-            ctx: *anyopaque,
-            context: *UserContext,
-            methods: *const InterfaceVtable,
+    pub fn execute(self: @This()) anyerror!void {
+        return try self.methods.execute(self.parser, self.context);
+    }
 
-            pub usingnamespace ParserInterfaceImpl(@This());
-        };
-}
+    pub fn parse(self: @This(), args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
+        return try self.methods.parse(self.parser, self.context, args, env);
+    }
+
+    pub fn finish(self: @This()) anyerror!void {
+        return try self.methods.finish(self.parser, self.context);
+    }
+};
 
 fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
     return if (@typeInfo(UserContext) == .Void) struct {
-        pub fn interface(self: *ParserType) ParserInterface(UserContext) {
-            return .{ .ctx = self, .methods = &.{ .execute = ParserType.wrap_execute } };
+        pub fn interface(self: *ParserType) ParserInterface {
+            return .{
+                .parser = self,
+                .context = @constCast(&void{}),
+                .methods = &.{
+                    .execute = ParserType.wrap_execute,
+                    .parse = ParserType.wrap_parse,
+                    .finish = ParserType.wrap_finish,
+                },
+            };
         }
     } else struct {
-        pub fn interface(self: *ParserType, context: *UserContext) ParserInterface(UserContext) {
-            return .{ .ctx = self, .context = context, .methods = &.{ .execute = ParserType.wrap_execute } };
+        pub fn interface(self: *ParserType, context: *UserContext) ParserInterface {
+            return .{
+                .parser = self,
+                .context = context,
+                .methods = &.{
+                    .execute = ParserType.wrap_execute,
+                    .parse = ParserType.wrap_parse,
+                    .finish = ParserType.wrap_finish,
+                },
+            };
         }
     };
 }
@@ -720,18 +728,67 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
         progname: ?[]const u8 = null,
         has_global_tags: bool = false,
         allocator: std.mem.Allocator,
+        subcommands: std.hash_map.StringHashMap(ParserInterface),
+        subcommand: ?ParserInterface = null,
 
-        // pub fn add_subcommand(self: *@This(), verb: []const u8, parser: anytype) void {
-        //     self.subcommands
-        // }
+        pub fn add_subcommand(self: *@This(), verb: []const u8, parser: ParserInterface) !void {
+            try self.subcommands.put(verb, parser);
+        }
 
         // This is a slightly annoying hack to work around the fact that there's no way to
         // provide a method signature conditionally.
         pub usingnamespace InterfaceGen(@This(), UserContext);
 
-        fn wrap_execute(ctx: *anyopaque, context: *UserContext) anyerror!void {
-            const self = @ptrCast(*@This(), @alignCast(@alignOf(@This()), ctx));
+        fn wrap_execute(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
+            const self = @ptrCast(*@This(), @alignCast(@alignOf(*@This()), parser));
+
+            // this is a slightly annoying hack to work around the problem that void has
+            // 0 alignment, which alignCast chokes on.
+            const context = if (@alignOf(UserContext) > 0)
+                @ptrCast(*UserContext, @alignCast(@alignOf(UserContext), ctx))
+            else
+                @ptrCast(*UserContext, ctx);
             return try self.execute(context);
+        }
+
+        fn wrap_parse(parser: *anyopaque, ctx: *anyopaque, args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
+            const self = @ptrCast(*@This(), @alignCast(@alignOf(@This()), parser));
+            const context = if (@alignOf(UserContext) > 0)
+                @ptrCast(*UserContext, @alignCast(@alignOf(UserContext), ctx))
+            else
+                @ptrCast(*UserContext, ctx);
+            return try self.subparse(context, args, env);
+        }
+
+        fn wrap_finish(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
+            const self = @ptrCast(*@This(), @alignCast(@alignOf(@This()), parser));
+            const context = if (@alignOf(UserContext) > 0)
+                @ptrCast(*UserContext, @alignCast(@alignOf(UserContext), ctx))
+            else
+                @ptrCast(*UserContext, ctx);
+            return try self.finish(context);
+        }
+
+        pub fn subparse(self: *@This(), context: *UserContext, args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
+            const sliceto = try self.parse(args);
+            try self.read_environment(env);
+            try self.convert(context);
+
+            inline for (@typeInfo(@TypeOf(self.intermediate)).Struct.fields) |field| {
+                if (@field(self.intermediate, field.name) == null) {
+                    std.debug.print("{s}: null,\n", .{field.name});
+                } else {
+                    std.debug.print("{s}: ", .{field.name});
+                    self.print_value(@field(self.intermediate, field.name).?, "");
+                }
+            }
+
+            if (self.subcommand) |verb| try verb.parse(args[sliceto..], env);
+        }
+
+        pub fn finish(self: *@This(), context: *UserContext) anyerror!void {
+            try callback(context, self.output);
+            if (self.subcommand) |verb| try verb.finish();
         }
 
         pub fn execute(self: *@This(), context: *UserContext) anyerror!void {
@@ -743,20 +800,9 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
             if (args.len < 1) return ParseError.EmptyArgs;
 
             self.progname = args[0];
-            try self.parse(args[1..]);
-            try self.read_environment(env);
-            try self.convert(context);
-            try callback(context, self.output);
 
-            inline for (@typeInfo(@TypeOf(self.intermediate)).Struct.fields) |field| {
-                // @compileLog(@typeName(field.type));
-                if (@field(self.intermediate, field.name) == null) {
-                    std.debug.print("{s}: null,\n", .{field.name});
-                } else {
-                    std.debug.print("{s}: ", .{field.name});
-                    self.print_value(@field(self.intermediate, field.name).?, "");
-                }
-            }
+            try self.subparse(context, args[1..], env);
+            try self.finish(context);
         }
 
         fn print_value(self: @This(), value: anytype, comptime indent: []const u8) void {
@@ -774,7 +820,7 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
         pub fn parse(
             self: *@This(),
             args: [][:0]u8,
-        ) anyerror!void {
+        ) anyerror!usize {
             // run pre-parse pass if we have any global parameters
             // try self.preparse()
 
@@ -830,8 +876,14 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
                     forced_ordinal = true;
                 }
 
-                try self.parse_ordinals(arg, &argit);
+                if (try self.parse_ordinals(arg, &argit)) |verb| {
+                    self.subcommand = verb;
+                    // TODO: return slice of remaining or offset index
+                    return argit.index;
+                }
             }
+
+            return 0;
         }
 
         inline fn parse_long_tag(
@@ -888,9 +940,7 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
             self: *@This(),
             arg: []const u8,
             argit: *ncmeta.SliceIterator([][:0]u8),
-        ) ParseError!void {
-            _ = arg;
-
+        ) ParseError!?ParserInterface {
             comptime var arg_index: u32 = 0;
             inline for (comptime parameters) |param| {
                 comptime if (@TypeOf(param).param_type != .Ordinal) continue;
@@ -903,13 +953,13 @@ fn Parser(comptime command: anytype, comptime callback: anytype) type {
                         try self.apply_param_values(param, argit, false);
                     }
                     self.consumed_args += 1;
-                    return;
+                    return null;
                 }
 
                 arg_index += 1;
             }
 
-            // look for subcommands now
+            return self.subcommands.get(arg) orelse ParseError.ExtraValue;
         }
 
         inline fn push_intermediate_value(
@@ -1055,18 +1105,34 @@ const cli = cmd: {
         .truthy = .{ .short_tag = "-M" },
         .env_var = "NOCLIP_MULTIFLAG",
     });
-    cmd.add_argument(.{ .OutputType = []const u8, .multi = true }, .{
+    cmd.add_argument(.{ .OutputType = []const u8 }, .{
         .name = "arg",
     });
 
     break :cmd cmd;
 };
 
+const subcommand = cmd: {
+    var cmd = command_builder(void);
+    cmd.add_flag(.{}, .{
+        .name = "flag",
+        .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
+        .falsy = .{ .long_tag = "--no-flag" },
+        .env_var = "NOCLIP_SUBFLAG",
+    });
+    cmd.add_argument(.{ .OutputType = []const u8 }, .{ .name = "argument" });
+    break :cmd cmd;
+};
+
+fn sub_handler(_: *void, result: subcommand.Output()) !void {
+    std.debug.print("subcommand: {s}\n", .{result.argument});
+}
+
 fn cli_handler(context: *u32, result: cli.Output()) !void {
     _ = context;
 
-    std.debug.print("callback is working {any}\n", .{result.multi.?.items});
-    std.debug.print("callback is working {any}\n", .{result.multiflag.?.items});
+    // std.debug.print("callback is working {any}\n", .{result.multi.?.items});
+    // std.debug.print("callback is working {any}\n", .{result.multiflag.?.items});
     std.debug.print("callback is working {any}\n", .{result.choice});
 }
 
@@ -1077,6 +1143,10 @@ pub fn main() !void {
 
     var parser = cli.bind(cli_handler, allocator);
     var context: u32 = 2;
+
+    var subcon = subcommand.bind(sub_handler, allocator);
+    try parser.add_subcommand("verb", subcon.interface());
+
     const iface = parser.interface(&context);
     try iface.execute();
 }
