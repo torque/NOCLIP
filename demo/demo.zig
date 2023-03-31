@@ -1,97 +1,89 @@
 const std = @import("std");
 const noclip = @import("noclip");
 
-const context: []const u8 = "hello friend";
-const ContextType = @TypeOf(context);
+const CommandBuilder = noclip.CommandBuilder;
 
-const subcommand = blk: {
-    var cmd = noclip.Command(ContextType, .{ .name = "verb", .help = "this a sub command" });
-    cmd.add(cmd.defaultHelpFlag);
-    cmd.add(cmd.StringOption{ .name = "meta", .short = "-m" });
-    cmd.add(cmd.StringArgument{ .name = "argument" });
-    cmd.add(cmd.Argument(u32){ .name = "another", .default = 0 });
-    break :blk cmd;
+const Choice = enum { first, second };
+
+const cli = cmd: {
+    var cmd = CommandBuilder(u32).init();
+    cmd.add_option(.{ .OutputType = struct { u8, u8 } }, .{
+        .name = "test",
+        .short_tag = "-t",
+        .long_tag = "--test",
+        .env_var = "NOCLIP_TEST",
+    });
+    cmd.add_option(.{ .OutputType = Choice }, .{
+        .name = "choice",
+        .short_tag = "-c",
+        .long_tag = "--choice",
+        .env_var = "NOCLIP_CHOICE",
+    });
+    cmd.add_option(.{ .OutputType = u32 }, .{
+        .name = "default",
+        .short_tag = "-d",
+        .long_tag = "--default",
+        .env_var = "NOCLIP_DEFAULT",
+        .default = 100,
+    });
+    cmd.add_option(.{ .OutputType = u8, .multi = true }, .{
+        .name = "multi",
+        .short_tag = "-m",
+        .long_tag = "--multi",
+        .env_var = "NOCLIP_MULTI",
+    });
+    cmd.add_flag(.{}, .{
+        .name = "flag",
+        .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
+        .falsy = .{ .long_tag = "--no-flag" },
+        .env_var = "NOCLIP_FLAG",
+    });
+    cmd.add_flag(.{ .multi = true }, .{
+        .name = "multiflag",
+        .truthy = .{ .short_tag = "-M" },
+        .env_var = "NOCLIP_MULTIFLAG",
+    });
+    cmd.add_argument(.{ .OutputType = []const u8 }, .{
+        .name = "arg",
+    });
+
+    break :cmd cmd;
 };
 
-const command = blk: {
-    var cmd = noclip.Command(ContextType, .{
-        .name = "main",
-        .help =
-        \\This is the main CLI entry point for the noclip demo
-        \\
-        \\This program demonstrates the major features of noclip both in terms of API
-        \\usage (in its source code) and argument parsing (in its execution).
-        ,
+const subcommand = cmd: {
+    var cmd = CommandBuilder(void).init();
+    cmd.add_flag(.{}, .{
+        .name = "flag",
+        .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
+        .falsy = .{ .long_tag = "--no-flag" },
+        .env_var = "NOCLIP_SUBFLAG",
     });
-    cmd.add(cmd.defaultHelpFlag);
-    cmd.add(cmd.Flag{ .name = "flag", .truthy = .{ .short = "-f", .long = "--flag" }, .falsy = .{ .long = "--no-flag" } });
-    cmd.add(cmd.StringOption{
-        .name = "input",
-        .short = "-i",
-        .long = "--input",
-        .help = "some generic input",
-        .default = "in",
-        .envVar = "OPTS_INPUT",
-    });
-    cmd.add(cmd.StringOption{
-        .name = "output",
-        .long = "--output",
-        .default = "waoh",
-        .help = "name of the output",
-    });
-    cmd.add(cmd.Option(i32){
-        .name = "number",
-        .short = "-n",
-        .long = "--number",
-        .help = "a number",
-        .default = 0,
-    });
-
-    cmd.add(subcommand.Parser(subCallback));
-    break :blk cmd;
+    cmd.add_argument(.{ .OutputType = []const u8 }, .{ .name = "argument" });
+    break :cmd cmd;
 };
 
-fn printHandler(ctx: ContextType, input: []const u8) ![]const u8 {
-    std.debug.print("ctx: {s}\n", .{ctx});
-    return input;
+fn sub_handler(_: *void, result: subcommand.Output()) !void {
+    std.debug.print("subcommand: {s}\n", .{result.argument});
 }
 
-pub fn subCallback(_: ContextType, result: subcommand.CommandResult()) !void {
-    std.debug.print(
-        \\subcommand: {{
-        \\    .meta = {s}
-        \\    .argument = {s}
-        \\    .another = {d}
-        \\}}
-        \\
-    ,
-        .{ result.meta, result.argument, result.another },
-    );
-}
+fn cli_handler(context: *u32, result: cli.Output()) !void {
+    _ = context;
 
-pub fn mainCommand(_: ContextType, result: command.CommandResult()) !void {
-    // std.debug.print("{any}", .{result});
-    std.debug.print(
-        \\arguments: {{
-        \\    .flag = {any}
-        \\    .input = {s}
-        \\    .output = {s}
-        \\    .number = {d}
-        \\}}
-        \\
-    ,
-        .{ result.flag, result.input, result.output, result.number },
-    );
+    std.debug.print("callback is working {any}\n", .{result.choice});
+    std.debug.print("callback is working {d}\n", .{result.default});
 }
 
 pub fn main() !void {
-    var parser = command.Parser(mainCommand);
-
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-
     const allocator = arena.allocator();
-    var argit = try std.process.argsWithAllocator(allocator);
 
-    try parser.execute(allocator, std.process.ArgIterator, &argit, context);
+    var parser = cli.bind(cli_handler, allocator);
+    var context: u32 = 2;
+
+    var subcon = subcommand.bind(sub_handler, allocator);
+    try parser.add_subcommand("verb", subcon.interface());
+
+    const iface = parser.interface(&context);
+    try iface.execute();
 }

@@ -117,8 +117,8 @@ pub const MutableTuple = struct {
     types: []const type = &[0]type{},
 
     pub fn add(comptime self: *@This(), comptime item: anytype) void {
-        self.pointers = &(@as([self.pointers.len]*const anyopaque, self.pointers[0..self.pointers.len].*) ++ [1]*const anyopaque{@as(*const anyopaque, &item)});
-        self.types = &(@as([self.types.len]type, self.types[0..self.types.len].*) ++ [1]type{@TypeOf(item)});
+        self.pointers = self.pointers ++ &[_]*const anyopaque{@as(*const anyopaque, &item)};
+        self.types = self.types ++ &[_]type{@TypeOf(item)};
     }
 
     pub fn retrieve(comptime self: @This(), comptime index: comptime_int) self.types[index] {
