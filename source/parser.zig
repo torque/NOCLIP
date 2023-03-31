@@ -117,8 +117,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         pub fn subparse(self: *@This(), context: *UserContext, args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
             const sliceto = try self.parse(args);
             try self.read_environment(env);
-            // try self.convert_eager(context);
-            try self.convert(context);
+            try self.convert_eager(context);
 
             inline for (@typeInfo(@TypeOf(self.intermediate)).Struct.fields) |field| {
                 if (@field(self.intermediate, field.name) == null) {
@@ -133,7 +132,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         }
 
         pub fn finish(self: *@This(), context: *UserContext) anyerror!void {
-            // try self.convert(context);
+            try self.convert(context);
             try callback(context, self.output);
             if (self.subcommand) |verb| try verb.finish();
         }
@@ -382,13 +381,15 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        fn convert(self: *@This(), context: *UserContext) NoclipError!void {
+        fn convert_eager(self: *@This(), context: *UserContext) NoclipError!void {
             inline for (comptime parameters) |param| {
                 if (comptime param.eager) {
                     try self.convert_param(param, context);
                 }
             }
+        }
 
+        fn convert(self: *@This(), context: *UserContext) NoclipError!void {
             inline for (comptime parameters) |param| {
                 if (comptime !param.eager) {
                     try self.convert_param(param, context);
