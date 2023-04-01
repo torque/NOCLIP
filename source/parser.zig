@@ -62,9 +62,9 @@ fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
 // be extremely type-sloppy here, which simplifies the signature.
 pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
     const UserContext = @TypeOf(command).UserContextType;
+    const parameters = command.generate();
     const Intermediate = command.Intermediate();
     const Output = command.Output();
-    const parameters = command.generate();
 
     return struct {
         intermediate: Intermediate = .{},
@@ -237,6 +237,10 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             arg: []const u8,
             argit: *ncmeta.SliceIterator([][:0]u8),
         ) ParseError!void {
+            if (comptime command.help_flag.long_tag) |long|
+                if (std.mem.eql(u8, arg, long))
+                    self.print_help();
+
             inline for (comptime parameters) |param| {
                 const PType = @TypeOf(param);
                 // removing the comptime here causes the compiler to die
@@ -263,6 +267,10 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             remaining: usize,
             argit: *ncmeta.SliceIterator([][:0]u8),
         ) ParseError!void {
+            if (comptime command.help_flag.short_tag) |short|
+                if (arg == short[1])
+                    self.print_help();
+
             inline for (comptime parameters) |param| {
                 const PType = @TypeOf(param);
                 // removing the comptime here causes the compiler to die
@@ -413,6 +421,12 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                     return;
                 }
             }
+        }
+
+        fn print_help(self: @This()) void {
+            _ = self;
+            std.debug.print("help!!!\n", .{});
+            std.process.exit(0);
         }
     };
 }

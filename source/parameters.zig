@@ -155,12 +155,12 @@ pub fn OptionConfig(comptime generics: ParameterGenerics) type {
     };
 }
 
-pub fn FlagConfig(comptime generics: ParameterGenerics) type {
-    const ShortLongPair = struct {
-        short_tag: ?[]const u8 = null,
-        long_tag: ?[]const u8 = null,
-    };
+pub const ShortLongPair = struct {
+    short_tag: ?[]const u8 = null,
+    long_tag: ?[]const u8 = null,
+};
 
+pub fn FlagConfig(comptime generics: ParameterGenerics) type {
     return struct {
         name: []const u8,
 

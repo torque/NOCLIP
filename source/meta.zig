@@ -112,7 +112,7 @@ pub fn copy_struct(comptime T: type, source: T, field_overrides: anytype) T {
 /// Stores type-erased pointers to items in comptime extensible data structures,
 /// which allows e.g. assembling a tuple through multiple calls rather than all
 /// at once.
-pub const MutableTuple = struct {
+pub const TupleBuilder = struct {
     pointers: []const *const anyopaque = &[0]*const anyopaque{},
     types: []const type = &[0]type{},
 

@@ -6,7 +6,11 @@ const CommandBuilder = noclip.CommandBuilder;
 const Choice = enum { first, second };
 
 const cli = cmd: {
-    var cmd = CommandBuilder(u32).init();
+    var cmd = CommandBuilder(u32).init(
+        \\The definitive noclip demonstration utility
+        \\
+        \\This command demonstrates the functionality of the noclip library. cool!!
+    );
     cmd.add_option(.{ .OutputType = struct { u8, u8 } }, .{
         .name = "test",
         .short_tag = "-t",
@@ -51,7 +55,11 @@ const cli = cmd: {
 };
 
 const subcommand = cmd: {
-    var cmd = CommandBuilder(void).init();
+    var cmd = CommandBuilder(void).init(
+        \\Perform some sort of work
+        \\
+        \\This subcommand is a mystery. It probably does something, but nobody is sure what.
+    );
     cmd.add_flag(.{}, .{
         .name = "flag",
         .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
@@ -78,10 +86,10 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var parser = cli.bind(cli_handler, allocator);
+    var parser = cli.create_parser(cli_handler, allocator);
     var context: u32 = 2;
 
-    var subcon = subcommand.bind(sub_handler, allocator);
+    var subcon = subcommand.create_parser(sub_handler, allocator);
     try parser.add_subcommand("verb", subcon.interface());
 
     const iface = parser.interface(&context);

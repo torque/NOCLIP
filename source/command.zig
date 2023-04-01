@@ -9,6 +9,7 @@ const ValueCount = parameters.ValueCount;
 const ParameterGenerics = parameters.ParameterGenerics;
 const OptionConfig = parameters.OptionConfig;
 const FlagConfig = parameters.FlagConfig;
+const ShortLongPair = parameters.ShortLongPair;
 const FlagBias = parameters.FlagBias;
 const make_option = parameters.make_option;
 const make_argument = parameters.make_argument;
@@ -72,13 +73,56 @@ fn BuilderGenerics(comptime UserContext: type) type {
 }
 
 pub fn CommandBuilder(comptime UserContext: type) type {
+    const HelpFlagOption = OptionConfig(.{
+        .UserContext = UserContext,
+        .OutputType = bool,
+        .param_type = .Nominal,
+        .value_count = .flag,
+        .multi = false,
+    });
+
     return struct {
-        param_spec: ncmeta.MutableTuple = .{},
+        param_spec: ncmeta.TupleBuilder = .{},
+        // this is a strange hack, but it's easily the path of least resistance
+        help_flag: ShortLongPair = .{ .short_tag = "-h", .long_tag = "--help" },
+        description: []const u8,
+        /// if any subcommands are provided, one of them must be specified, or the command has failed.
+        subcommand_required: bool = true,
 
         pub const UserContextType = UserContext;
 
-        pub fn init() @This() {
-            return .{};
+        pub fn init(comptime description: []const u8) @This() {
+            return .{ .description = description };
+        }
+
+        pub fn create_parser(
+            comptime self: @This(),
+            comptime callback: self.CallbackSignature(),
+            allocator: std.mem.Allocator,
+        ) Parser(self, callback) {
+            return Parser(self, callback){
+                .allocator = allocator,
+                .subcommands = std.hash_map.StringHashMap(ParserInterface).init(allocator),
+            };
+        }
+
+        pub fn set_help_flag(
+            comptime self: *@This(),
+            comptime tags: ShortLongPair,
+        ) void {
+            self.help_flag = tags;
+        }
+
+        pub fn mock_help_parameter(comptime self: @This()) ?HelpFlagOption {
+            if (self.help_flag.short_tag == null and self.help_flag.long_tag == null) return null;
+
+            return HelpFlagOption{
+                .name = "_internal_help_flag",
+                .short_tag = self.help_flag.short_tag,
+                .long_tag = self.help_flag.long_tag,
+                .description = "Print this help message and exit",
+                .flag_bias = true,
+            };
         }
 
         pub fn add_argument(
@@ -102,15 +146,6 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             }
 
             self.param_spec.add(make_option(bgen.opt_gen(), config));
-        }
-
-        pub fn set_help_flag(
-            comptime self: *@This(),
-            comptime bgen: BuilderGenerics(UserContext),
-            comptime config: FlagConfig(bgen.flag_gen()),
-        ) void {
-            _ = self;
-            _ = config;
         }
 
         pub fn add_flag(
@@ -371,17 +406,6 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     .is_tuple = false,
                 } });
             }
-        }
-
-        pub fn bind(
-            comptime self: @This(),
-            comptime callback: self.CallbackSignature(),
-            allocator: std.mem.Allocator,
-        ) Parser(self, callback) {
-            return Parser(self, callback){
-                .allocator = allocator,
-                .subcommands = std.hash_map.StringHashMap(ParserInterface).init(allocator),
-            };
         }
     };
 }
