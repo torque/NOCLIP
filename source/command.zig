@@ -178,7 +178,6 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     .required = config.required,
                     .global = config.global,
                     //
-                    .exposed = config.exposed,
                     .secret = config.secret,
                     .nice_type_name = "flag",
                 };
@@ -277,7 +276,6 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                             .alignment = 0,
                         }};
 
-                    if (!param.exposed) continue :paramloop;
                     while (flag_skip > 0) {
                         flag_skip -= 1;
                         continue :paramloop;

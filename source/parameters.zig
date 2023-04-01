@@ -148,7 +148,6 @@ pub fn OptionConfig(comptime generics: ParameterGenerics) type {
         required: bool = generics.param_type == .Ordinal,
         global: bool = false,
 
-        exposed: bool = true,
         secret: bool = false,
         nice_type_name: []const u8 = @typeName(generics.OutputType),
         flag_bias: FlagBias = .unbiased,
@@ -176,7 +175,6 @@ pub fn FlagConfig(comptime generics: ParameterGenerics) type {
         required: bool = false,
         global: bool = false,
 
-        exposed: bool = true,
         secret: bool = false,
     };
 }
@@ -212,7 +210,6 @@ fn OptionType(comptime generics: ParameterGenerics) type {
 
         /// if false, do not expose the resulting value in the output type.
         /// the converter must have side effects for this option to do anything.
-        exposed: bool,
         /// do not print help for this parameter
         secret: bool,
 
@@ -278,7 +275,6 @@ pub fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionCo
         .required = opts.required,
         .global = opts.global,
         //
-        .exposed = opts.exposed,
         .secret = opts.secret,
         .nice_type_name = opts.nice_type_name,
         .flag_bias = opts.flag_bias,
@@ -320,7 +316,6 @@ pub fn make_argument(
             .required = opts.required,
             .global = opts.global,
             //
-            .exposed = opts.exposed,
             .secret = opts.secret,
             .nice_type_name = opts.nice_type_name,
             .flag_bias = .unbiased,
