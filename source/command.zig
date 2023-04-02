@@ -1,6 +1,7 @@
 const std = @import("std");
 const StructField = std.builtin.Type.StructField;
 
+const help = @import("./help.zig");
 const ncmeta = @import("./meta.zig");
 const parameters = @import("./parameters.zig");
 const parser = @import("./parser.zig");
@@ -103,6 +104,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             return Parser(self, callback){
                 .allocator = allocator,
                 .subcommands = std.hash_map.StringHashMap(ParserInterface).init(allocator),
+                .help_builder = help.HelpBuilder(self).init(allocator),
             };
         }
 

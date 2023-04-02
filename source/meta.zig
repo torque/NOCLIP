@@ -52,6 +52,65 @@ pub fn enum_length(comptime T: type) comptime_int {
     return @typeInfo(T).Enum.fields.len;
 }
 
+pub fn ComptimeWriter(
+    comptime Context: type,
+    comptime writeFn: fn (comptime context: Context, comptime bytes: []const u8) error{}!usize,
+) type {
+    return struct {
+        context: Context,
+
+        const Self = @This();
+        pub const Error = error{};
+
+        pub fn write(comptime self: Self, comptime bytes: []const u8) Error!usize {
+            return writeFn(self.context, bytes);
+        }
+
+        pub fn writeAll(comptime self: Self, comptime bytes: []const u8) Error!void {
+            var index: usize = 0;
+            while (index != bytes.len) {
+                index += try self.write(bytes[index..]);
+            }
+        }
+
+        pub fn print(comptime self: Self, comptime format: []const u8, args: anytype) Error!void {
+            return std.fmt.format(self, format, args) catch @compileError("woah");
+        }
+
+        pub fn writeByte(comptime self: Self, byte: u8) Error!void {
+            const array = [1]u8{byte};
+            return self.writeAll(&array);
+        }
+
+        pub fn writeByteNTimes(comptime self: Self, byte: u8, n: usize) Error!void {
+            var bytes: [256]u8 = undefined;
+            std.mem.set(u8, bytes[0..], byte);
+
+            var remaining: usize = n;
+            while (remaining > 0) {
+                const to_write = std.math.min(remaining, bytes.len);
+                try self.writeAll(bytes[0..to_write]);
+                remaining -= to_write;
+            }
+        }
+    };
+}
+
+pub const ComptimeSliceBuffer = struct {
+    buffer: []const u8 = &[_]u8{},
+
+    const Writer = ComptimeWriter(*@This(), appendslice);
+
+    pub fn writer(comptime self: *@This()) Writer {
+        return .{ .context = self };
+    }
+
+    fn appendslice(comptime self: *@This(), comptime bytes: []const u8) error{}!usize {
+        self.buffer = self.buffer ++ bytes;
+        return bytes.len;
+    }
+};
+
 pub fn SliceIterator(comptime T: type) type {
     // could be expanded to use std.meta.Elem, perhaps
     const ResultType = std.meta.Child(T);

@@ -9,10 +9,12 @@ const ParameterType = enum {
     Executable,
 };
 
+pub const FixedCount = u32;
+
 pub const ValueCount = union(enum) {
     flag: void,
     count: void,
-    fixed: u32,
+    fixed: FixedCount,
 };
 
 pub const FlagBias = enum {
@@ -227,12 +229,12 @@ fn OptionType(comptime generics: ParameterGenerics) type {
 
 fn check_short(comptime short_tag: ?[]const u8) void {
     const short = comptime short_tag orelse return;
-    if (short.len != 2 or short[0] != '-') @compileError("bad short tag" ++ short);
+    if (short.len != 2 or short[0] != '-') @compileError("bad short tag: " ++ short);
 }
 
 fn check_long(comptime long_tag: ?[]const u8) void {
     const long = comptime long_tag orelse return;
-    if (long.len < 3 or long[0] != '-' or long[1] != '-') @compileError("bad long tag" ++ long);
+    if (long.len < 3 or long[0] != '-' or long[1] != '-') @compileError("bad long tag: " ++ long);
 }
 
 pub fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionConfig(generics)) OptionType(generics) {

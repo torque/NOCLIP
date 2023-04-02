@@ -1,7 +1,8 @@
 const std = @import("std");
 
-const ncmeta = @import("./meta.zig");
 const errors = @import("./errors.zig");
+const help = @import("./help.zig");
+const ncmeta = @import("./meta.zig");
 
 const ParseError = errors.ParseError;
 const NoclipError = errors.NoclipError;
@@ -75,6 +76,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         allocator: std.mem.Allocator,
         subcommands: std.hash_map.StringHashMap(ParserInterface),
         subcommand: ?ParserInterface = null,
+        help_builder: help.HelpBuilder(command),
 
         pub fn add_subcommand(self: *@This(), verb: []const u8, parser: ParserInterface) !void {
             try self.subcommands.put(verb, parser);
@@ -118,15 +120,6 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             const sliceto = try self.parse(args);
             try self.read_environment(env);
             try self.convert_eager(context);
-
-            inline for (@typeInfo(@TypeOf(self.intermediate)).Struct.fields) |field| {
-                if (@field(self.intermediate, field.name) == null) {
-                    std.debug.print("{s}: null,\n", .{field.name});
-                } else {
-                    std.debug.print("{s}: ", .{field.name});
-                    self.print_value(@field(self.intermediate, field.name).?, "");
-                }
-            }
 
             if (self.subcommand) |verb| try verb.parse(args[sliceto..], env);
         }
@@ -423,10 +416,13 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        fn print_help(self: @This()) void {
-            _ = self;
-            std.debug.print("help!!!\n", .{});
-            std.process.exit(0);
+        fn print_help(self: *@This()) noreturn {
+            defer std.process.exit(0);
+            const stderr = std.io.getStdErr().writer();
+            if (self.help_builder.build_message("test", self.subcommands)) |message|
+                stderr.writeAll(message) catch return
+            else |_|
+                stderr.writeAll("There was a problem generating the help.") catch return;
         }
     };
 }

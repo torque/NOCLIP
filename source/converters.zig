@@ -21,7 +21,7 @@ pub fn default_converter(comptime gen: ParameterGenerics) ?ConverterSignature(ge
             string_converter(gen)
         else
             null,
-        .Enum => choice_converter(gen),
+        .Enum => |info| if (info.is_exhaustive) choice_converter(gen) else null,
         // TODO: how to handle structs with field defaults? maybe this should only work
         // for tuples, which I don't think can have defaults.
         .Struct => |info| if (gen.value_count == .fixed and gen.value_count.fixed == info.fields.len)

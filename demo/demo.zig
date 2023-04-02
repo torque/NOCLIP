@@ -16,12 +16,17 @@ const cli = cmd: {
         .short_tag = "-t",
         .long_tag = "--test",
         .env_var = "NOCLIP_TEST",
+        .description = "multi-value test option",
+        .nice_type_name = "int> <int",
     });
     cmd.add_option(.{ .OutputType = Choice }, .{
         .name = "choice",
         .short_tag = "-c",
         .long_tag = "--choice",
+        .default = .second,
         .env_var = "NOCLIP_CHOICE",
+        .description = "enum choice option",
+        .nice_type_name = "choice",
     });
     cmd.add_option(.{ .OutputType = u32 }, .{
         .name = "default",
@@ -29,23 +34,28 @@ const cli = cmd: {
         .long_tag = "--default",
         .env_var = "NOCLIP_DEFAULT",
         .default = 100,
+        .description = "default value integer option",
+        .nice_type_name = "uint",
     });
     cmd.add_option(.{ .OutputType = u8, .multi = true }, .{
         .name = "multi",
         .short_tag = "-m",
         .long_tag = "--multi",
         .env_var = "NOCLIP_MULTI",
+        .description = "multiple specification test option",
     });
     cmd.add_flag(.{}, .{
         .name = "flag",
         .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
-        .falsy = .{ .long_tag = "--no-flag" },
+        .falsy = .{ .short_tag = "-F", .long_tag = "--no-flag" },
         .env_var = "NOCLIP_FLAG",
+        .description = "boolean flag",
     });
     cmd.add_flag(.{ .multi = true }, .{
         .name = "multiflag",
         .truthy = .{ .short_tag = "-M" },
         .env_var = "NOCLIP_MULTIFLAG",
+        .description = "multiple specification test flag ",
     });
     cmd.add_argument(.{ .OutputType = []const u8 }, .{
         .name = "arg",
