@@ -151,7 +151,7 @@ pub fn OptionConfig(comptime generics: ParameterGenerics) type {
         global: bool = false,
 
         secret: bool = false,
-        nice_type_name: []const u8 = @typeName(generics.OutputType),
+        nice_type_name: ?[]const u8 = null,
         flag_bias: FlagBias = .unbiased,
     };
 }
@@ -279,7 +279,7 @@ pub fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionCo
         .global = opts.global,
         //
         .secret = opts.secret,
-        .nice_type_name = opts.nice_type_name,
+        .nice_type_name = opts.nice_type_name orelse @typeName(generics.OutputType),
         .flag_bias = opts.flag_bias,
     };
 }
@@ -320,7 +320,7 @@ pub fn make_argument(
             .global = opts.global,
             //
             .secret = opts.secret,
-            .nice_type_name = opts.nice_type_name,
+            .nice_type_name = opts.nice_type_name orelse @typeName(generics.OutputType),
             .flag_bias = .unbiased,
         };
     }

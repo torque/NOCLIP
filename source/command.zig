@@ -73,14 +73,6 @@ fn BuilderGenerics(comptime UserContext: type) type {
 }
 
 pub fn CommandBuilder(comptime UserContext: type) type {
-    const HelpFlagOption = OptionConfig(.{
-        .UserContext = UserContext,
-        .OutputType = bool,
-        .param_type = .Nominal,
-        .value_count = .flag,
-        .multi = false,
-    });
-
     return struct {
         param_spec: ncmeta.TupleBuilder = .{},
         // this is a strange hack, but it's easily the path of least resistance
@@ -114,16 +106,37 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             self.help_flag = tags;
         }
 
-        pub fn mock_help_parameter(comptime self: @This()) ?HelpFlagOption {
-            if (self.help_flag.short_tag == null and self.help_flag.long_tag == null) return null;
+        const string_generics = BuilderGenerics(UserContext){ .OutputType = []const u8 };
 
-            return HelpFlagOption{
-                .name = "_internal_help_flag",
-                .short_tag = self.help_flag.short_tag,
-                .long_tag = self.help_flag.long_tag,
-                .description = "Print this help message and exit",
-                .flag_bias = true,
-            };
+        pub fn string_option(
+            comptime self: *@This(),
+            comptime cfg: OptionConfig(string_generics.opt_gen()),
+        ) void {
+            const config = if (cfg.nice_type_name == null)
+                ncmeta.copy_struct(@TypeOf(cfg), cfg, .{ .nice_type_name = "string" })
+            else
+                cfg;
+
+            self.add_option(string_generics.opt_gen(), config);
+        }
+
+        pub fn string_argument(
+            comptime self: *@This(),
+            comptime cfg: OptionConfig(string_generics.arg_gen()),
+        ) void {
+            const config = if (cfg.nice_type_name == null)
+                ncmeta.copy_struct(@TypeOf(cfg), cfg, .{ .nice_type_name = "string" })
+            else
+                cfg;
+
+            self.add_argument(string_generics.arg_gen(), config);
+        }
+
+        pub fn simple_flag(
+            comptime self: *@This(),
+            comptime cfg: FlagConfig(string_generics.flag_gen()),
+        ) void {
+            self.add_flag(string_generics, cfg);
         }
 
         pub fn add_argument(
