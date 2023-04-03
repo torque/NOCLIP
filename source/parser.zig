@@ -423,7 +423,9 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
         fn convert_param(self: *@This(), comptime param: anytype, context: *UserContext) NoclipError!void {
             if (@field(self.intermediate, param.name)) |intermediate| {
-                @field(self.output, param.name) = try param.converter(context, intermediate);
+                var buffer = std.ArrayList(u8).init(self.allocator);
+                const writer = buffer.writer();
+                @field(self.output, param.name) = try param.converter(context, intermediate, writer);
             } else {
                 if (comptime param.required) {
                     return ParseError.RequiredParameterMissing;

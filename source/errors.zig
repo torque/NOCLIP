@@ -1,4 +1,5 @@
 pub const ConversionError = error{
+    OutOfMemory,
     ConversionFailed,
 };
 
