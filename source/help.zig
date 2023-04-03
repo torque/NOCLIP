@@ -4,8 +4,6 @@ const ncmeta = @import("./meta.zig");
 const parser = @import("./parser.zig");
 const FixedCount = @import("./parameters.zig").FixedCount;
 
-// error.OutOfMemory
-
 const AlignablePair = struct {
     left: []const u8,
     right: []const u8,
@@ -31,84 +29,129 @@ pub fn HelpBuilder(comptime command: anytype) type {
         pub fn build_message(
             self: *@This(),
             name: []const u8,
-            subcommands: std.hash_map.StringHashMap(parser.ParserInterface),
+            subcommands: parser.CommandMap,
         ) ![]const u8 {
-            try self.describe_command(name, subcommands);
-
-            return self.writebuffer.toOwnedSlice();
-        }
-
-        fn describe_command(
-            self: *@This(),
-            name: []const u8,
-            subcommands: std.hash_map.StringHashMap(parser.ParserInterface),
-        ) !void {
             const writer = self.writebuffer.writer();
             try writer.print(
                 "Usage: {s}{s}{s}{s}\n\n",
                 .{
                     name,
-                    try self.option_brief(),
-                    if (help_info.arguments.len > 0) " <arguments>" else "",
-                    if (subcommands.count() > 0) " [<subcommand> ...]" else "",
+                    self.option_brief(),
+                    try self.args_brief(),
+                    self.subcommands_brief(subcommands),
                 },
             );
 
             try writer.writeAll(std.mem.trim(u8, command.description, " \n"));
             try writer.writeAll("\n\n");
 
+            const arguments = try self.describe_arguments();
             const options = try self.describe_options();
-            if (options.pairs.len > 0) {
-                try writer.writeAll("Options:\n");
-            }
+            const env_vars = try self.describe_env();
+            const subcs = try self.describe_subcommands(subcommands);
+            const max_just = @max(arguments.just, @max(options.just, @max(env_vars.just, subcs.just)));
 
-            for (options.pairs) |pair| {
-                try writer.print(
-                    "  {[0]s: <[1]}{[2]s}\n",
-                    .{ pair.left, options.just + 3, pair.right },
-                );
-            }
-        }
-
-        fn option_brief(self: @This()) ![]const u8 {
-            if (comptime help_info.options.len > 1) {
-                return " [options...]";
-            } else if (comptime help_info.options.len == 1) {
-                return " [option]";
-            } else if (comptime help_info.options.len == 0) {
-                return "";
-            } else {
-                var buffer = std.ArrayList(u8).init(self.writebuffer.allocator);
-                const writer = buffer.writer();
-
-                for (comptime help_info.options) |opt| {
-                    try writer.writeAll(" [");
-
-                    var written = false;
-                    if (opt.short_truthy) |tag| {
-                        try writer.writeAll(tag);
-                        written = true;
-                    }
-                    if (opt.long_truthy) |tag| {
-                        if (written) try writer.writeAll(" | ");
-                        try writer.writeAll(tag);
-                        written = true;
-                    }
-                    if (opt.short_falsy) |tag| {
-                        if (written) try writer.writeAll(" | ");
-                        try writer.writeAll(tag);
-                        written = true;
-                    }
-                    if (opt.long_falsy) |tag| {
-                        if (written) try writer.writeAll(" | ");
-                        try writer.writeAll(tag);
-                    }
-
-                    try writer.writeAll("]");
+            if (arguments.pairs.len > 0) {
+                try writer.writeAll("Arguments:\n");
+                for (arguments.pairs) |pair| {
+                    try writer.print(
+                        "  {[0]s: <[1]}{[2]s}\n",
+                        .{ pair.left, max_just + 3, pair.right },
+                    );
                 }
 
-                return buffer.toOwnedSlice();
+                try writer.writeAll("\n");
             }
+
+            if (options.pairs.len > 0) {
+                try writer.writeAll("Options:\n");
+                for (options.pairs) |pair| {
+                    try writer.print(
+                        "  {[0]s: <[1]}{[2]s}\n",
+                        .{ pair.left, max_just + 3, pair.right },
+                    );
+                }
+
+                try writer.writeAll("\n");
+            }
+
+            if (env_vars.pairs.len > 0) {
+                try writer.writeAll("Environment variables:\n");
+                for (env_vars.pairs) |pair| {
+                    try writer.print(
+                        "  {[0]s: <[1]}{[2]s}\n",
+                        .{ pair.left, max_just + 3, pair.right },
+                    );
+                }
+
+                try writer.writeAll("\n");
+            }
+
+            if (subcs.pairs.len > 0) {
+                try writer.writeAll("Subcommands:\n");
+                for (subcs.pairs) |pair| {
+                    try writer.print(
+                        "  {[0]s: <[1]}{[2]s}\n",
+                        .{ pair.left, max_just + 3, pair.right },
+                    );
+                }
+
+                try writer.writeAll("\n");
+            }
+
+            return self.writebuffer.toOwnedSlice();
+        }
+
+        fn option_brief(_: @This()) []const u8 {
+            return if (comptime help_info.options.len > 0)
+                " [options...]"
+            else
+                "";
+        }
+
+        fn args_brief(self: @This()) ![]const u8 {
+            var buf = std.ArrayList(u8).init(self.writebuffer.allocator);
+            const writer = buf.writer();
+
+            for (comptime help_info.arguments) |arg| {
+                try writer.writeAll(" ");
+                if (!arg.required) try writer.writeAll("[");
+                try writer.print("<{s}>", .{arg.name});
+                if (!arg.required) try writer.writeAll("]");
+            }
+
+            return buf.toOwnedSlice();
+        }
+
+        fn subcommands_brief(
+            _: @This(),
+            subcommands: parser.CommandMap,
+        ) []const u8 {
+            return if (subcommands.count() > 0)
+                " <subcommand ...>"
+            else
+                "";
+        }
+
+        fn describe_arguments(self: @This()) !OptionDescription {
+            var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
+
+            var just: usize = 0;
+            for (comptime help_info.arguments) |arg| {
+                if (arg.description.len == 0) continue;
+
+                const pair: AlignablePair = .{
+                    .left = arg.name,
+                    .right = arg.description,
+                };
+                if (pair.left.len > just) just = pair.left.len;
+                try pairs.append(pair);
+            }
+
+            return .{
+                .pairs = try pairs.toOwnedSlice(),
+                .just = just,
+            };
         }
 
         fn describe_options(self: @This()) !OptionDescription {
@@ -163,8 +206,18 @@ pub fn HelpBuilder(comptime command: anytype) type {
 
             const left = try buffer.toOwnedSlice();
 
+            if (comptime opt.required) {
+                try writer.writeAll("[required]");
+            }
+
             if (comptime opt.description.len > 0) {
+                if (buffer.items.len > 0) try writer.writeAll(" ");
                 try writer.writeAll(opt.description);
+            }
+
+            if (comptime opt.env_var) |env| {
+                if (buffer.items.len > 0) try writer.writeAll(" ");
+                try writer.print("(env: {s})", .{env});
             }
 
             if (comptime opt.default) |def| {
@@ -172,13 +225,53 @@ pub fn HelpBuilder(comptime command: anytype) type {
                 try writer.print("(default: {s})", .{def});
             }
 
-            if (comptime opt.required) {
-                if (buffer.items.len > 0) try writer.writeAll(" ");
-                try writer.writeAll("[required]");
-            }
             const right = try buffer.toOwnedSlice();
 
             return .{ .left = left, .right = right };
+        }
+
+        fn describe_env(self: @This()) !OptionDescription {
+            var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
+
+            var just: usize = 0;
+            for (comptime help_info.env_vars) |env| {
+                if (env.description.len == 0) continue;
+
+                const pair: AlignablePair = .{
+                    .left = env.env_var,
+                    .right = env.description,
+                };
+                if (pair.left.len > just) just = pair.left.len;
+                try pairs.append(pair);
+            }
+
+            return .{
+                .pairs = try pairs.toOwnedSlice(),
+                .just = just,
+            };
+        }
+
+        fn describe_subcommands(self: @This(), subcommands: parser.CommandMap) !OptionDescription {
+            var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
+
+            var just: usize = 0;
+            var iter = subcommands.keyIterator();
+            while (iter.next()) |key| {
+                const subif = subcommands.get(key.*).?;
+                const short = ncmeta.partition(u8, subif.describe(), "\n");
+
+                const pair: AlignablePair = .{
+                    .left = key.*,
+                    .right = short[0],
+                };
+                if (pair.left.len > just) just = pair.left.len;
+                try pairs.append(pair);
+            }
+
+            return .{
+                .pairs = try pairs.toOwnedSlice(),
+                .just = just,
+            };
         }
     };
 }
@@ -197,6 +290,7 @@ const OptHelp = struct {
     env_var: ?[]const u8 = null,
     description: []const u8 = "",
     type_name: []const u8 = "",
+    extra: []const u8 = "",
     default: ?[]const u8 = null,
     // this is the pivot
     value_count: FixedCount = 0,
@@ -212,6 +306,7 @@ const EnvHelp = struct {
 
 const ArgHelp = struct {
     name: []const u8 = "",
+    description: []const u8 = "",
     type_name: []const u8 = "",
     multi: bool = false,
     required: bool = true,
@@ -228,22 +323,28 @@ pub fn opt_info(comptime command: anytype) CommandHelp {
 
         paramloop: for (command) |param| {
             const PType = @TypeOf(param);
-            if (PType.param_type != .Nominal) continue :paramloop;
+            if (PType.param_type == .Ordinal) {
+                arguments = arguments ++ &[_]ArgHelp{.{
+                    .name = param.name,
+                    .description = param.description,
+                    .type_name = param.nice_type_name,
+                    .multi = PType.multi,
+                    .required = param.required,
+                }};
+
+                continue :paramloop;
+            }
 
             if (!std.mem.eql(u8, last_name, param.name)) {
                 if (last_name.len > 0) {
-                    if (last_option.short_truthy != null or
-                        last_option.long_truthy != null or
-                        last_option.short_falsy != null or
-                        last_option.long_falsy != null)
-                    {
-                        options = options ++ &[_]OptHelp{last_option};
-                    } else {
+                    if (env_only(last_option)) {
                         env_vars = env_vars ++ &[_]EnvHelp{.{
                             .env_var = last_option.env_var,
                             .description = last_option.description,
                             .default = last_option.default,
                         }};
+                    } else {
+                        options = options ++ &[_]OptHelp{last_option};
                     }
                 }
                 last_name = param.name;
@@ -272,6 +373,7 @@ pub fn opt_info(comptime command: anytype) CommandHelp {
             last_option.description = param.description;
             last_option.required = param.required;
             last_option.multi = PType.multi;
+
             if (param.default) |def| {
                 var buf = ncmeta.ComptimeSliceBuffer{};
                 const writer = buf.writer();
@@ -284,18 +386,14 @@ pub fn opt_info(comptime command: anytype) CommandHelp {
         }
 
         if (last_name.len > 0) {
-            if (last_option.short_truthy != null or
-                last_option.long_truthy != null or
-                last_option.short_falsy != null or
-                last_option.long_falsy != null)
-            {
-                options = options ++ &[_]OptHelp{last_option};
-            } else {
+            if (env_only(last_option)) {
                 env_vars = env_vars ++ &[_]EnvHelp{.{
-                    .env_var = last_option.env_var,
+                    .env_var = last_option.env_var.?,
                     .description = last_option.description,
                     .default = last_option.default,
                 }};
+            } else {
+                options = options ++ &[_]OptHelp{last_option};
             }
         }
 
@@ -305,4 +403,11 @@ pub fn opt_info(comptime command: anytype) CommandHelp {
             .env_vars = env_vars,
         };
     }
+}
+
+inline fn env_only(option: OptHelp) bool {
+    return option.short_truthy == null and
+        option.long_truthy == null and
+        option.short_falsy == null and
+        option.long_falsy == null;
 }

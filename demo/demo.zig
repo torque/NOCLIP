@@ -9,7 +9,7 @@ const cli = cmd: {
     var cmd = CommandBuilder(u32).init(
         \\The definitive noclip demonstration utility
         \\
-        \\This command demonstrates the functionality of the noclip library. cool!!
+        \\This command demonstrates the functionality of the noclip library. cool!
     );
     cmd.add_option(.{ .OutputType = struct { u8, u8 } }, .{
         .name = "test",
@@ -41,7 +41,6 @@ const cli = cmd: {
         .name = "multi",
         .short_tag = "-m",
         .long_tag = "--multi",
-        .env_var = "NOCLIP_MULTI",
         .description = "multiple specification test option",
     });
     cmd.add_flag(.{}, .{
@@ -54,11 +53,16 @@ const cli = cmd: {
     cmd.add_flag(.{ .multi = true }, .{
         .name = "multiflag",
         .truthy = .{ .short_tag = "-M" },
-        .env_var = "NOCLIP_MULTIFLAG",
         .description = "multiple specification test flag ",
+    });
+    cmd.add_option(.{ .OutputType = u8 }, .{
+        .name = "env",
+        .env_var = "NOCLIP_ENVIRON",
+        .description = "environment variable only option",
     });
     cmd.add_argument(.{ .OutputType = []const u8 }, .{
         .name = "arg",
+        .description = "This is an argument that doesn't really do anything, but it's very important.",
     });
 
     break :cmd cmd;

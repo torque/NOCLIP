@@ -52,6 +52,26 @@ pub fn enum_length(comptime T: type) comptime_int {
     return @typeInfo(T).Enum.fields.len;
 }
 
+pub fn partition(comptime T: type, input: []const T, wedge: []const T) [3][]const T {
+    for (input, 0..) |candidate, idx| {
+        for (wedge) |splitter| {
+            if (candidate == splitter) {
+                return [3][]const T{
+                    input[0..idx],
+                    input[idx..(idx + 1)],
+                    input[(idx + 1)..],
+                };
+            }
+        }
+    }
+
+    return [3][]const T{
+        input[0..],
+        input[input.len..],
+        input[input.len..],
+    };
+}
+
 pub fn ComptimeWriter(
     comptime Context: type,
     comptime writeFn: fn (comptime context: Context, comptime bytes: []const u8) error{}!usize,

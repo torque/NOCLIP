@@ -1,4 +1,4 @@
-pub const ConversionError = error {
+pub const ConversionError = error{
     ConversionFailed,
 };
 

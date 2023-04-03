@@ -3,11 +3,7 @@ const std = @import("std");
 const converters = @import("./converters.zig");
 const ConverterSignature = converters.ConverterSignature;
 
-const ParameterType = enum {
-    Nominal,
-    Ordinal,
-    Executable,
-};
+const ParameterType = enum { Nominal, Ordinal };
 
 pub const FixedCount = u32;
 
