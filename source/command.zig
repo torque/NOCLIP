@@ -25,7 +25,6 @@ fn BuilderGenerics(comptime UserContext: type) type {
         multi: bool = false,
 
         pub fn arg_gen(comptime self: @This()) ParameterGenerics {
-            if (self.OutputType == void) @compileError("argument must have OutputType specified");
             if (self.value_count == .flag) @compileError("argument may not be a flag");
             if (self.value_count == .count) @compileError("argument may not be a count");
 
@@ -39,8 +38,8 @@ fn BuilderGenerics(comptime UserContext: type) type {
         }
 
         pub fn opt_gen(comptime self: @This()) ParameterGenerics {
-            if (self.OutputType == void) @compileError("option must have OutputType specified");
             if (self.value_count == .flag) @compileError("option may not be a flag");
+            if (self.value_count == .count) @compileError("option may not be a count");
 
             return ParameterGenerics{
                 .UserContext = UserContext,
@@ -246,6 +245,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                 var env_var_fields: []const StructField = &[_]StructField{};
 
                 paramloop: for (spec, 0..) |param, idx| {
+                    const PType = @TypeOf(param);
                     // these three blocks are to check for redundantly defined tags and
                     // environment variables. This only works within a command. It
                     // doesn't support compile time checks for conflict into
@@ -278,12 +278,13 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                             .alignment = 0,
                         }};
 
+                    if (!PType.has_output) continue :paramloop;
+
                     while (flag_skip > 0) {
                         flag_skip -= 1;
                         continue :paramloop;
                     }
 
-                    const PType = @TypeOf(param);
                     if (PType.is_flag) {
                         var peek = idx + 1;
                         var bias_seen: [ncmeta.enum_length(FlagBias)]bool = [_]bool{false} ** ncmeta.enum_length(FlagBias);

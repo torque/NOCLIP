@@ -425,18 +425,25 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             if (@field(self.intermediate, param.name)) |intermediate| {
                 var buffer = std.ArrayList(u8).init(self.allocator);
                 const writer = buffer.writer();
-                @field(self.output, param.name) = try param.converter(context, intermediate, writer);
+
+                if (comptime @TypeOf(param).has_output) {
+                    @field(self.output, param.name) = try param.converter(context, intermediate, writer);
+                } else {
+                    try param.converter(context, intermediate, writer);
+                }
             } else {
                 if (comptime param.required) {
                     return ParseError.RequiredParameterMissing;
-                } else if (comptime param.default) |def| {
-                    // this has to be explicitly set because even though we set it as
-                    // the field default, it gets clobbered because self.output is
-                    // initialized as undefined.
-                    @field(self.output, param.name) = def;
-                } else {
-                    @field(self.output, param.name) = null;
-                    return;
+                } else if (comptime @TypeOf(param).has_output) {
+                    if (comptime param.default) |def| {
+                        // this has to be explicitly set because even though we set it as
+                        // the field default, it gets clobbered because self.output is
+                        // initialized as undefined.
+                        @field(self.output, param.name) = def;
+                    } else {
+                        @field(self.output, param.name) = null;
+                        return;
+                    }
                 }
             }
         }

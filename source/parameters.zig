@@ -29,16 +29,20 @@ pub const FlagBias = enum {
 
 pub const ParameterGenerics = struct {
     UserContext: type = void,
+    /// If void, do not expose this parameter in the aggregate converted parameter
+    /// object. The converter for this parameter shall not return a value. This may be
+    /// useful for implementing complex conversion that produces output through its
+    /// side effects or by modifying the user context.
     OutputType: type = void,
     param_type: ParameterType,
     value_count: ValueCount,
     /// allow this named parameter to be passed multiple times.
     /// values will be appended when it is encountered. If false, only the
     /// final encountered instance will be used.
-    multi: bool,
     // since we now use multi in place of greedy values for simplicity, we may want to
     // convert this an enum or add an additional flag to distinguish between the
     // many-to-many and the many-to-one cases.
+    multi: bool,
 
     pub fn fixed_value_count(comptime OutputType: type, comptime value_count: ValueCount) ValueCount {
         return comptime if (value_count == .fixed)
@@ -54,12 +58,12 @@ pub const ParameterGenerics = struct {
             value_count;
     }
 
-    pub fn clone_without_multi(comptime self: @This()) @This() {
-        return .{ .UserContext = self.UserContext, .OutputType = self.OutputType, .param_type = self.param_type, .value_count = self.value_count, .multi = false };
-    }
-
     pub fn has_context(comptime self: @This()) bool {
         return comptime self.UserContext != void;
+    }
+
+    pub fn has_output(comptime self: @This()) bool {
+        return self.OutputType != void;
     }
 
     pub fn is_flag(comptime self: @This()) bool {
@@ -71,7 +75,7 @@ pub const ParameterGenerics = struct {
 
     pub fn ConvertedType(comptime self: @This()) type {
         // is this the correct way to collapse this?
-        return comptime if (self.multi and self.value_count != .count)
+        return comptime if (self.multi and self.value_count != .count and self.OutputType != void)
             std.ArrayList(self.ReturnValue())
         else
             self.ReturnValue();
@@ -184,6 +188,7 @@ fn OptionType(comptime generics: ParameterGenerics) type {
         pub const is_flag: bool = generics.is_flag();
         pub const value_count: ValueCount = generics.value_count;
         pub const multi: bool = generics.multi;
+        pub const has_output: bool = generics.has_output();
 
         name: []const u8,
         short_tag: ?[]const u8,
