@@ -1,0 +1,235 @@
+@charset "UTF-8";
+
+:root {
+/*    Base16-Eighties, lightly modified*/
+    --gray-n2: #1E1E1E;
+    --gray-n1: #262626;
+    --gray-0: #2D2D2D;
+    --gray-1: #393939;
+    --gray-2: #515151;
+    --gray-3: #747369;
+    --gray-4: #A09F93;
+    --gray-5: #D3D0C8; /* foreground */
+    --gray-6: #E8E6DF;
+    --gray-7: #F2F0EC;
+    --red: #F2777A;
+    --orange: #F99157;
+    --yellow: #FFCC66;
+    --green: #99CC99;
+    --aqua: #66CCCC;
+    --blue: #6699CC;
+    --purple: #CC99CC;
+    --pink: #CC7799;
+
+/*    Semantic aliases*/
+    --background-color: var(--gray-0);
+    --foreground-color: var(--gray-5);
+    --nav-color: var(--gray-n2);
+    --sidebar-color: var(--gray-n1);
+    --border-color: var(--gray-1);
+
+    --example-min-width: 950px;
+    --description-max-width: 850px;
+    --description-min-width: 600px;
+    --section-header-height: 70px;
+    --nav-sidebar-width: 270px;
+}
+
+/*@media (prefers-color-scheme: dark) {*/
+@media (prefers-color-scheme: light) {
+    :root {
+        --background-color: var(--gray-7);
+        --foreground-color: var(--gray-1);
+        --sidebar-color: var(--gray-6);
+        --border-color: var(--gray-6);
+    }
+}
+
+body {
+    background: var(--background-color);
+    color: var(--foreground-color);
+    margin: 0;
+    font-size: 16pt;
+    font-family: sans-serif;
+}
+
+pre { margin: 0; }
+
+p {
+    color: var(--gray-5);
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    margin: 0;
+}
+
+p + p {
+    text-indent: 1em;
+}
+
+body .layout {
+    height: 100vh;
+    display: grid;
+    grid-template-rows: 1fr;
+    grid-template-columns: var(--nav-sidebar-width) 1fr;
+    grid-template-areas: "sidebar doc";
+    max-width: 100vw;
+}
+
+body .layout .sidebar {
+    grid-area: sidebar;
+/*    border-right: 2px solid var(--border-color);*/
+    background: var(--nav-color);
+    overflow: scroll;
+}
+
+body .layout .sidebar nav {
+    padding-bottom: 1em;
+}
+
+body .layout .sidebar .header {
+    position: sticky;
+    top: 0;
+    background: var(--nav-color);
+    height: var(--section-header-height);
+    line-height: var(--section-header-height);
+    font-size: 20pt;
+    padding: 0 30px;
+}
+
+body .layout .sidebar .nav a {
+    color: var(--gray-4);
+    text-decoration: none;
+}
+
+body .layout .sidebar .nav a:hover {
+    color: var(--blue);
+}
+
+body .layout .sidebar .nav .item {
+    box-sizing: border-box;
+    padding: 0.2em 30px;
+}
+
+body .layout .doc {
+    grid-area: doc;
+    height: 100vh;
+    overflow-y: scroll;
+}
+
+body .layout .doc .doc-padding {
+    padding-bottom: 80vh;
+    max-width: 100%;
+}
+
+body .layout .doc section {
+    display: grid;
+    grid-template-columns: minmax(var(--description-min-width), var(--description-max-width)) minmax(var(--example-min-width), 1fr);
+    grid-template-areas: "description example";
+}
+
+body .layout .doc section .header {
+    grid-column-start: description;
+    grid-column-end: example;
+    background: var(--sidebar-color);
+    font-size: 20pt;
+    line-height: var(--section-header-height);
+    padding: 0 1ex;
+/*    position: sticky;*/
+/*    top: 0;*/
+/*    border-bottom: 1px solid var(--border-color);*/
+}
+
+body .layout .doc section .description {
+    grid-column-start: description;
+    grid-column-end: description;
+    box-sizing: border-box;
+    padding: 1em;
+    text-align: justify;
+}
+
+body .layout .doc section .example {
+    grid-column-start: example;
+    grid-column-end: example;
+    overflow: visible;
+}
+
+body .layout .doc section .example .codebox {
+    box-sizing: border-box;
+    position: sticky;
+    top: 0;
+    overflow-x: scroll;
+    background: var(--sidebar-color);
+    padding: 1em 1em;
+    border-bottom: 15px solid var(--background-color);
+}
+
+body .layout .doc section .example .code-markup {
+    counter-reset: example;
+    font-size: 12pt;
+    line-height: 1.3;
+/*    border-left: 2px inset black;*/
+/*    box-shadow: 10px 0 10px -10px var(--gray-n2) inset;*/
+/*    top: var(--section-header-height);*/
+}
+
+body .layout .doc section .example .code-markup .line {
+    padding-right: 1em;
+}
+
+.code-markup .keyword { color: var(--purple); }
+.code-markup .builtin { color: var(--aqua); }
+.code-markup .string { color: var(--green); }
+.code-markup .test { color: var(--pink); }
+
+/*It turns out these have to come after the directives they override.*/
+@media (max-width: 1820px) {
+    body .layout .doc section {
+        display: grid;
+        grid-template-columns: 1fr;
+        grid-template-areas: "header" "description" "example";
+    }
+
+    body .layout .doc section .description {
+        max-width: var(--description-max-width);
+    }
+
+    body .layout .doc section .example .codebox {
+        max-width: calc(100vw - var(--nav-sidebar-width));
+        border-bottom: none;
+    }
+
+    body .layout .doc section .example .code-markup {
+        position: initial;
+    }
+
+    body .layout .doc section .example:last-child {
+        margin-bottom: 15px;
+    }
+}
+
+@media (max-width: 1220px) {
+    body .layout {
+        display: grid;
+        grid-template-rows: auto auto;
+        grid-template-columns: 1fr;
+        grid-template-areas: "sidebar" "doc";
+        max-width: 100vw;
+    }
+
+    body .layout .sidebar {
+        overflow: visible;
+    }
+
+    body .layout .doc {
+        overflow-y: initial;
+    }
+
+    body .layout .doc section .description {
+        width: 100%;
+        margin: auto;
+    }
+
+    body .layout .doc section .example .codebox {
+        max-width: 100vw;
+    }
+}
