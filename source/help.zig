@@ -196,22 +196,25 @@ pub fn HelpBuilder(comptime command: anytype) type {
 
         fn args_brief(self: @This()) ![]const u8 {
             var buf = std.ArrayList(u8).init(self.writebuffer.allocator);
+            defer buf.deinit();
+
             const writer = buf.writer();
 
             for (comptime help_info.arguments) |arg| {
                 try writer.writeAll(" ");
                 if (!arg.required) try writer.writeAll("[");
-                try writer.print("<{s}{s}>", .{ arg.name, if (arg.multi) " ..." else "" });
+                try writer.writeByte('<');
+                try writer.writeAll(arg.name);
+                if (arg.multi)
+                    try writer.print(" [{s} ...]", .{arg.name});
+                try writer.writeByte('>');
                 if (!arg.required) try writer.writeAll("]");
             }
 
             return buf.toOwnedSlice();
         }
 
-        fn subcommands_brief(
-            _: @This(),
-            subcommands: parser.CommandMap,
-        ) []const u8 {
+        fn subcommands_brief(_: @This(), subcommands: parser.CommandMap) []const u8 {
             return if (subcommands.count() > 0)
                 " <subcommand ...>"
             else
@@ -220,6 +223,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
 
         fn describe_arguments(self: @This()) !OptionDescription {
             var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
+            defer pairs.deinit();
 
             var just: usize = 0;
             for (comptime help_info.arguments) |arg| {
@@ -241,6 +245,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
 
         fn describe_options(self: @This()) !OptionDescription {
             var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
+            defer pairs.deinit();
 
             var just: usize = 0;
             for (comptime help_info.options) |opt| {
@@ -257,6 +262,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
 
         fn describe_option(self: @This(), opt: OptHelp) !AlignablePair {
             var buffer = std.ArrayList(u8).init(self.writebuffer.allocator);
+            defer buffer.deinit();
             const writer = buffer.writer();
 
             if (comptime opt.short_truthy) |tag| {
@@ -317,6 +323,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
 
         fn describe_env(self: @This()) !OptionDescription {
             var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
+            defer pairs.deinit();
 
             var just: usize = 0;
             for (comptime help_info.env_vars) |env| {
@@ -338,6 +345,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
 
         fn describe_subcommands(self: @This(), subcommands: parser.CommandMap) !OptionDescription {
             var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
+            defer pairs.deinit();
 
             var just: usize = 0;
             var iter = subcommands.keyIterator();
@@ -395,6 +403,7 @@ const ArgHelp = struct {
 };
 
 pub fn opt_info(comptime command: anytype) CommandHelp {
+    // TODO: this could be runtime and it would be slightly simpler.
     comptime {
         var options: []const OptHelp = &[_]OptHelp{};
         var env_vars: []const EnvHelp = &[_]EnvHelp{};
