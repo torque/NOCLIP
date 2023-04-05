@@ -5,6 +5,7 @@ pub fn build(b: *std.build.Builder) void {
     const optimize = b.standardOptimizeOption(.{});
 
     demo(b, target, optimize);
+    tokenator(b, target, optimize);
 
     const tests = b.step("test", "Run unit tests");
     const lib_tests = b.addTest(.{
@@ -31,4 +32,20 @@ fn demo(b: *std.build.Builder, target: anytype, optimize: anytype) void {
     const install_demo = b.addInstallArtifact(exe);
 
     demo_step.dependOn(&install_demo.step);
+}
+
+fn tokenator(b: *std.build.Builder, target: anytype, optimize: anytype) void {
+    const tok_step = b.step("tokenator", "Build documentation tokenizer");
+    const noclip = b.createModule(.{ .source_file = .{ .path = "source/noclip.zig" } });
+
+    const exe = b.addExecutable(.{
+        .name = "tokenator",
+        .root_source_file = .{ .path = "documentation/tokenator.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.addModule("noclip", noclip);
+    const install_tok = b.addInstallArtifact(exe);
+
+    tok_step.dependOn(&install_tok.step);
 }
