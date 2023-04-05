@@ -432,9 +432,17 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 const writer = buffer.writer();
 
                 if (comptime @TypeOf(param).has_output) {
-                    @field(self.output, param.name) = try param.converter(context, intermediate, writer);
+                    @field(self.output, param.name) = param.converter(context, intermediate, writer) catch |err| {
+                        const stderr = std.io.getStdErr().writer();
+                        stderr.print("Error parsing option \"{s}\": {s}\n", .{ param.name, buffer.items }) catch {};
+                        return err;
+                    };
                 } else {
-                    try param.converter(context, intermediate, writer);
+                    param.converter(context, intermediate, writer) catch |err| {
+                        const stderr = std.io.getStdErr().writer();
+                        stderr.print("Error parsing option \"{s}\": {s}\n", .{ param.name, buffer.items }) catch {};
+                        return err;
+                    };
                 }
             } else {
                 if (comptime param.required) {
