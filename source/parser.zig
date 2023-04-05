@@ -141,6 +141,11 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                     &[_][]const u8{ name, args[sliceto - 1] },
                 );
                 try verb.parse(verbname, args[sliceto..], env);
+            } else if (self.subcommands.count() > 0 and command.subcommand_required) {
+                const stderr = std.io.getStdErr().writer();
+                try stderr.writeAll("A subcommand is required.\n\n");
+
+                self.print_help(name);
             }
         }
 
