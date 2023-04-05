@@ -1,8 +1,9 @@
 const std = @import("std");
 
+const NoclipError = @import("./errors.zig").NoclipError;
 const ncmeta = @import("./meta.zig");
-const parser = @import("./parser.zig");
 const FixedCount = @import("./parameters.zig").FixedCount;
+const parser = @import("./parser.zig");
 
 const AlignablePair = struct {
     left: []const u8,
@@ -13,6 +14,105 @@ const OptionDescription = struct {
     pairs: []AlignablePair,
     just: usize,
 };
+
+pub fn StructuredPrinter(comptime Writer: type) type {
+    return struct {
+        wrap_width: usize = 100,
+        writer: Writer,
+
+        pub fn print_pair(self: *@This(), pair: AlignablePair, leading_indent: u8, tabstop: usize) !void {
+            try self.writer.writeByteNTimes(' ', leading_indent);
+            const left = std.mem.trim(u8, pair.left, " \n");
+            try self.writer.writeAll(left);
+
+            const offset: usize = leading_indent + left.len;
+            // TODO: lol return a real error
+            if (offset > tabstop) return NoclipError.UnexpectedFailure;
+
+            try self.writer.writeByteNTimes(' ', tabstop - offset);
+            try self.print_rewrap(std.mem.trim(u8, pair.right, " \n"), tabstop);
+            try self.writer.writeByte('\n');
+        }
+
+        pub fn print_pair_brief(self: *@This(), pair: AlignablePair, leading_indent: u8, tabstop: usize) !void {
+            const brief = ncmeta.partition(u8, pair.right, &[_][]const u8{"\n\n"})[0];
+            const simulacrum: AlignablePair = .{
+                .left = pair.left,
+                .right = brief,
+            };
+
+            try self.print_pair(simulacrum, leading_indent, tabstop);
+        }
+
+        pub fn print_wrapped(self: *@This(), text: []const u8, leading_indent: usize) !void {
+            try self.writer.writeByteNTimes(' ', leading_indent);
+            try self.print_rewrap(std.mem.trim(u8, text, "\n"), leading_indent);
+        }
+
+        fn print_rewrap(self: *@This(), text: []const u8, indent: usize) !void {
+            // TODO: lol return a real error
+            if (indent >= self.wrap_width) return NoclipError.UnexpectedFailure;
+
+            // this assumes output stream has already had the first line properly
+            // indented.
+            var splitter = std.mem.split(u8, text, "\n");
+
+            var location: usize = indent;
+            while (splitter.next()) |line| {
+                if (line.len == 0) {
+                    // we have a trailing line that needs to be cleaned up
+                    if (location > indent)
+                        _ = try self.clear_line(indent);
+                    location = try self.clear_line(indent);
+                    continue;
+                }
+
+                var choppee = line;
+                var need_forced_break = false;
+                choppa: while (choppee.len > 0) {
+                    const breakoff = self.wrap_width - location;
+
+                    if (breakoff >= choppee.len) {
+                        if (location > indent)
+                            try self.writer.writeByte(' ');
+
+                        try self.writer.writeAll(choppee);
+                        location += choppee.len;
+                        break;
+                    }
+
+                    var split = breakoff;
+                    while (choppee[split] != ' ') : (split -= 1) {
+                        if (split == 0) {
+                            // we have encountered a word that is too long to break,
+                            // so force breaking it
+                            if (need_forced_break) {
+                                split = breakoff;
+                                break;
+                            }
+                            if (location != indent)
+                                location = try self.clear_line(indent);
+
+                            need_forced_break = true;
+                            continue :choppa;
+                        }
+                    }
+                    if (location > indent)
+                        try self.writer.writeByte(' ');
+                    try self.writer.writeAll(choppee[0..split]);
+                    location = try self.clear_line(indent);
+                    choppee = choppee[split + 1 ..];
+                }
+            }
+        }
+
+        fn clear_line(self: *@This(), indent: usize) !usize {
+            try self.writer.writeByte('\n');
+            try self.writer.writeByteNTimes(' ', indent);
+            return indent;
+        }
+    };
+}
 
 pub fn HelpBuilder(comptime command: anytype) type {
     const help_info = opt_info(command.generate());
@@ -42,7 +142,8 @@ pub fn HelpBuilder(comptime command: anytype) type {
                 },
             );
 
-            try writer.writeAll(std.mem.trim(u8, command.description, " \n"));
+            var printer = StructuredPrinter(@TypeOf(writer)){ .writer = writer };
+            try printer.print_wrapped(command.description, 2);
             try writer.writeAll("\n\n");
 
             const arguments = try self.describe_arguments();
@@ -53,48 +154,32 @@ pub fn HelpBuilder(comptime command: anytype) type {
 
             if (arguments.pairs.len > 0) {
                 try writer.writeAll("Arguments:\n");
-                for (arguments.pairs) |pair| {
-                    try writer.print(
-                        "  {[0]s: <[1]}{[2]s}\n",
-                        .{ pair.left, max_just + 3, pair.right },
-                    );
-                }
+                for (arguments.pairs) |pair|
+                    try printer.print_pair(pair, 2, max_just + 4);
 
                 try writer.writeAll("\n");
             }
 
             if (options.pairs.len > 0) {
                 try writer.writeAll("Options:\n");
-                for (options.pairs) |pair| {
-                    try writer.print(
-                        "  {[0]s: <[1]}{[2]s}\n",
-                        .{ pair.left, max_just + 3, pair.right },
-                    );
-                }
+                for (options.pairs) |pair|
+                    try printer.print_pair(pair, 2, max_just + 4);
 
                 try writer.writeAll("\n");
             }
 
             if (env_vars.pairs.len > 0) {
                 try writer.writeAll("Environment variables:\n");
-                for (env_vars.pairs) |pair| {
-                    try writer.print(
-                        "  {[0]s: <[1]}{[2]s}\n",
-                        .{ pair.left, max_just + 3, pair.right },
-                    );
-                }
+                for (env_vars.pairs) |pair|
+                    try printer.print_pair(pair, 2, max_just + 4);
 
                 try writer.writeAll("\n");
             }
 
             if (subcs.pairs.len > 0) {
                 try writer.writeAll("Subcommands:\n");
-                for (subcs.pairs) |pair| {
-                    try writer.print(
-                        "  {[0]s: <[1]}{[2]s}\n",
-                        .{ pair.left, max_just + 3, pair.right },
-                    );
-                }
+                for (subcs.pairs) |pair|
+                    try printer.print_pair_brief(pair, 2, max_just + 4);
 
                 try writer.writeAll("\n");
             }
@@ -116,7 +201,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             for (comptime help_info.arguments) |arg| {
                 try writer.writeAll(" ");
                 if (!arg.required) try writer.writeAll("[");
-                try writer.print("<{s}>", .{arg.name});
+                try writer.print("<{s}{s}>", .{ arg.name, if (arg.multi) " ..." else "" });
                 if (!arg.required) try writer.writeAll("]");
             }
 
@@ -257,12 +342,9 @@ pub fn HelpBuilder(comptime command: anytype) type {
             var just: usize = 0;
             var iter = subcommands.keyIterator();
             while (iter.next()) |key| {
-                const subif = subcommands.get(key.*).?;
-                const short = ncmeta.partition(u8, subif.describe(), "\n");
-
                 const pair: AlignablePair = .{
                     .left = key.*,
-                    .right = short[0],
+                    .right = subcommands.get(key.*).?.describe(),
                 };
                 if (pair.left.len > just) just = pair.left.len;
                 try pairs.append(pair);

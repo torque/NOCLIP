@@ -52,14 +52,16 @@ pub fn enum_length(comptime T: type) comptime_int {
     return @typeInfo(T).Enum.fields.len;
 }
 
-pub fn partition(comptime T: type, input: []const T, wedge: []const T) [3][]const T {
-    for (input, 0..) |candidate, idx| {
+pub fn partition(comptime T: type, input: []const T, wedge: []const []const T) [3][]const T {
+    var idx: usize = 0;
+    while (idx < input.len) : (idx += 1) {
         for (wedge) |splitter| {
-            if (candidate == splitter) {
+            if (input.len - idx < splitter.len) continue;
+            if (std.mem.eql(T, input[idx .. idx + splitter.len], splitter)) {
                 return [3][]const T{
                     input[0..idx],
-                    input[idx..(idx + 1)],
-                    input[(idx + 1)..],
+                    input[idx..(idx + splitter.len)],
+                    input[(idx + splitter.len)..],
                 };
             }
         }
