@@ -77,15 +77,11 @@ pub fn CommandBuilder(comptime UserContext: type) type {
         param_spec: ncmeta.TupleBuilder = .{},
         // this is a strange hack, but it's easily the path of least resistance
         help_flag: ShortLongPair = .{ .short_tag = "-h", .long_tag = "--help" },
-        description: []const u8,
         /// if any subcommands are provided, one of them must be specified, or the command has failed.
         subcommand_required: bool = true,
+        description: []const u8,
 
         pub const UserContextType = UserContext;
-
-        pub fn init(comptime description: []const u8) @This() {
-            return .{ .description = description };
-        }
 
         pub fn create_parser(
             comptime self: @This(),

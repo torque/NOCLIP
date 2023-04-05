@@ -6,11 +6,13 @@ const CommandBuilder = noclip.CommandBuilder;
 const Choice = enum { first, second };
 
 const cli = cmd: {
-    var cmd = CommandBuilder(u32).init(
+    var cmd = CommandBuilder(u32){
+        .description =
         \\The definitive noclip demonstration utility
         \\
         \\This command demonstrates the functionality of the noclip library. cool!
-    );
+        ,
+    };
     cmd.add_option(.{ .OutputType = struct { u8, u8 } }, .{
         .name = "test",
         .short_tag = "-t",
@@ -69,11 +71,13 @@ const cli = cmd: {
 };
 
 const subcommand = cmd: {
-    var cmd = CommandBuilder(void).init(
+    var cmd = CommandBuilder(void){
+        .description =
         \\Perform some sort of work
         \\
         \\This subcommand is a mystery. It probably does something, but nobody is sure what.
-    );
+        ,
+    };
     cmd.add_flag(.{}, .{
         .name = "flag",
         .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
@@ -95,7 +99,7 @@ fn cli_handler(context: *u32, result: cli.Output()) !void {
     std.debug.print("callback is working {d}\n", .{result.default});
 }
 
-pub fn main() !void {
+pub fn main() !u8 {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -107,5 +111,7 @@ pub fn main() !void {
     try parser.add_subcommand("verb", subcon.interface());
 
     const iface = parser.interface(&context);
-    try iface.execute();
+    iface.execute() catch return 1;
+
+    return 0;
 }
