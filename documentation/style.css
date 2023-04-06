@@ -19,7 +19,7 @@
     --aqua: #66CCCC;
     --blue: #6699CC;
     --purple: #CC99CC;
-    --pink: #CC7799;
+    --pink: #FFCCFF;
 
 /*    Semantic aliases*/
     --background-color: var(--gray-0);
@@ -33,17 +33,17 @@
     --description-min-width: 600px;
     --section-header-height: 70px;
     --nav-sidebar-width: 270px;
+    --nav-horizontal-padding: 30px;
 }
 
-/*@media (prefers-color-scheme: dark) {*/
-@media (prefers-color-scheme: light) {
+/*@media (prefers-color-scheme: light) {
     :root {
         --background-color: var(--gray-7);
         --foreground-color: var(--gray-1);
         --sidebar-color: var(--gray-6);
         --border-color: var(--gray-6);
     }
-}
+}*/
 
 body {
     background: var(--background-color);
@@ -56,7 +56,7 @@ body {
 pre { margin: 0; }
 
 p {
-    color: var(--gray-5);
+    color: var(--foreground-color);
     hyphens: auto;
     -webkit-hyphens: auto;
     margin: 0;
@@ -70,7 +70,7 @@ body .layout {
     height: 100vh;
     display: grid;
     grid-template-rows: 1fr;
-    grid-template-columns: var(--nav-sidebar-width) 1fr;
+    grid-template-columns: auto 1fr;
     grid-template-areas: "sidebar doc";
     max-width: 100vw;
 }
@@ -89,11 +89,35 @@ body .layout .sidebar nav {
 body .layout .sidebar .header {
     position: sticky;
     top: 0;
+    box-sizing: border-box;
     background: var(--nav-color);
     height: var(--section-header-height);
     line-height: var(--section-header-height);
     font-size: 20pt;
-    padding: 0 30px;
+    padding: 0 var(--nav-horizontal-padding);
+    width: var(--nav-sidebar-width);
+}
+
+label.collapse-label {
+    display: block;
+    cursor: pointer;
+}
+
+input.collapse-toggle {
+    display: none;
+}
+
+input.collapse-toggle:checked + label.header {
+    color: var(--blue);
+    transform: rotate(90deg);
+    width: var(--section-header-height);
+}
+
+input.collapse-toggle:checked + label.collapse-label + .collapse-view {
+    max-height: 0;
+    max-width: 0;
+    padding: 0;
+    overflow: clip;
 }
 
 body .layout .sidebar .nav a {
@@ -107,7 +131,7 @@ body .layout .sidebar .nav a:hover {
 
 body .layout .sidebar .nav .item {
     box-sizing: border-box;
-    padding: 0.2em 30px;
+    padding: 0.2em var(--nav-horizontal-padding);
 }
 
 body .layout .doc {
@@ -177,9 +201,12 @@ body .layout .doc section .example .code-markup .line {
 }
 
 .code-markup .keyword { color: var(--purple); }
+.code-markup .type { color: var(--purple); }
 .code-markup .builtin { color: var(--aqua); }
 .code-markup .string { color: var(--green); }
-.code-markup .test { color: var(--pink); }
+.code-markup .comment { color: var(--gray-3); }
+.code-markup .literal { color: var(--orange); }
+.code-markup .name { color: var(--red); }
 
 /*It turns out these have to come after the directives they override.*/
 @media (max-width: 1820px) {
@@ -196,10 +223,11 @@ body .layout .doc section .example .code-markup .line {
     body .layout .doc section .example .codebox {
         max-width: calc(100vw - var(--nav-sidebar-width));
         border-bottom: none;
+        position: initial;
     }
 
-    body .layout .doc section .example .code-markup {
-        position: initial;
+    body .layout:has(> .sidebar #destroyer-of-navs:checked) .doc section .example .codebox {
+        max-width: calc(100vw - var(--section-header-height));
     }
 
     body .layout .doc section .example:last-child {
@@ -213,14 +241,24 @@ body .layout .doc section .example .code-markup .line {
         grid-template-rows: auto auto;
         grid-template-columns: 1fr;
         grid-template-areas: "sidebar" "doc";
+        height: initial;
         max-width: 100vw;
     }
 
     body .layout .sidebar {
         overflow: visible;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+    }
+
+    input.collapse-toggle:checked + label.header {
+        width: 100%;
+        transform: initial;
     }
 
     body .layout .doc {
+        height: initial;
         overflow-y: initial;
     }
 
