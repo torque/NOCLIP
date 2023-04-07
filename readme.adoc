@@ -22,36 +22,65 @@ ____
 
 == Hello
 
-Requires Zig `0.10.0` or maybe better. Uses stage2-only features.
+Requires a pre-release version of Zig `0.11.0`. `0.11.0-dev.1844+75ff34db9` is the
+oldest version specifically known to me to work.
 
 === Features
 
-* short- (`-s`) and long- (`--long`) style options
-* short options can be chained (e.g. `-abc` is the same as `-a -b -c`)
-* conventional `--` to force early of argument parsing
-* option values are deserialized into rich types using conversion callback functions
-* can specify default values for options that may be omitted
-* options can be bound to load from environmental variables if not specified directly
-* nested subcommands (e.g. for `git`-style CLIs (`command subcommand subsubcommand`))
+WARNING: NOCLIP is usable but not currently mature or well-tested. Unfinished features
+and bugs likely exist.
 
-=== Planned
-
-* help text generation
-* better error reporting
-* better build system
-
-=== Under consideration
-
-* multi-value option flags
-* shell completion integration
-* `--long=value` style of value specification
-* Is it actually possible for a published written document to truly be
-extemporaneous?
+* highly configurable short/long option and argument specification
+  ** named options can be associated with an environment variable
+  ** named flags, which take no value and can be biased `true` or `false`
+  ** multiple specification options, which can be provided many times to the CLI
+  ** overridable built-in conversion functions for standard types
+  ** required options that must be specified by the user
+  ** default values for options
+* arbitrarily nestable subcommands for building sophisticated tools
+* parser that supports many conventional CLI behaviors
+  ** congealed short flags (e.g. `-abc` is the same as `-a -b -c`)
+  ** `--` to force early of argument parsing
+  ** both `--long value` and `--long=value` styles are supported
+* option values are converted into rich native types using conversion callback functions
+  ** integers
+  ** basic tuple values
+  ** strings
+  ** enumerations as named choice sets
+  ** more to come
+* automatic help text generation and formatting
+* CLI specification and parser are built at compile time
 
 === Use
 
 `zig build demo` for a demo. Otherwise just copy the file or use a submodule or
 something.
+
+----
+Usage: noclip-demo [options...] <arg> <subcommand ...>
+
+  The definitive noclip demonstration utility
+
+  This command demonstrates the functionality of the noclip library. cool!
+
+Arguments:
+  arg                         This is an argument that doesn't really do anything, but it's very
+                              important.
+
+Options:
+  -t, --test <int> <int>      multi-value test option (env: NOCLIP_TEST)
+  -c, --choice <choice>       enum choice option (env: NOCLIP_CHOICE) (default: demo.Choice.second)
+  -d, --default <uint>        default value integer option (env: NOCLIP_DEFAULT) (default: 100)
+  -m, --multi <u8>            multiple specification test option
+  -f, --flag / -F, --no-flag  boolean flag (env: NOCLIP_FLAG)
+  -M                          multiple specification test flag
+
+Environment variables:
+  NOCLIP_ENVIRON              environment variable only option
+
+Subcommands:
+  verb                        Perform some sort of work
+----
 
 == LICENSE
 
