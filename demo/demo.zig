@@ -6,7 +6,7 @@ const CommandBuilder = noclip.CommandBuilder;
 const Choice = enum { first, second };
 
 const cli = cmd: {
-    var cmd = CommandBuilder(u32){
+    var cmd = CommandBuilder(*u32){
         .description =
         \\The definitive noclip demonstration utility
         \\
@@ -71,14 +71,14 @@ const cli = cmd: {
 };
 
 const subcommand = cmd: {
-    var cmd = CommandBuilder(void){
+    var cmd = CommandBuilder([]const u8){
         .description =
         \\Perform some sort of work
         \\
         \\This subcommand is a mystery. It probably does something, but nobody is sure what.
         ,
     };
-    cmd.add_flag(.{}, .{
+    cmd.simple_flag(.{
         .name = "flag",
         .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
         .falsy = .{ .long_tag = "--no-flag" },
@@ -88,15 +88,16 @@ const subcommand = cmd: {
     break :cmd cmd;
 };
 
-fn sub_handler(_: *void, result: subcommand.Output()) !void {
+fn sub_handler(context: []const u8, result: subcommand.Output()) !void {
     std.debug.print("subcommand: {s}\n", .{result.argument});
+    std.debug.print("context: {s}\n", .{context});
 }
 
 fn cli_handler(context: *u32, result: cli.Output()) !void {
-    _ = context;
-
+    std.debug.print("context: {d}\n", .{context.*});
     std.debug.print("callback is working {any}\n", .{result.choice});
     std.debug.print("callback is working {d}\n", .{result.default});
+    context.* += 1;
 }
 
 pub fn main() !u8 {
@@ -106,9 +107,10 @@ pub fn main() !u8 {
 
     var parser = cli.create_parser(cli_handler, allocator);
     var context: u32 = 2;
+    const sc: []const u8 = "whassup";
 
     var subcon = subcommand.create_parser(sub_handler, allocator);
-    try parser.add_subcommand("verb", subcon.interface());
+    try parser.add_subcommand("verb", subcon.interface(&sc));
 
     const iface = parser.interface(&context);
     iface.execute() catch return 1;

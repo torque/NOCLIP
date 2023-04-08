@@ -11,7 +11,7 @@ const ErrorWriter = std.ArrayList(u8).Writer;
 
 pub fn ConverterSignature(comptime gen: ParameterGenerics) type {
     return *const fn (
-        context: *gen.UserContext,
+        context: gen.UserContext,
         input: gen.IntermediateType(),
         failure: ErrorWriter,
     ) ConversionError!gen.ConvertedType();
@@ -46,7 +46,7 @@ fn multi_converter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
     const Intermediate = gen.IntermediateType();
 
     return struct {
-        pub fn handler(context: *gen.UserContext, input: Intermediate, failure: ErrorWriter) ConversionError!std.ArrayList(gen.OutputType) {
+        pub fn handler(context: gen.UserContext, input: Intermediate, failure: ErrorWriter) ConversionError!std.ArrayList(gen.OutputType) {
             var output = std.ArrayList(gen.OutputType).initCapacity(input.allocator, input.items.len) catch
                 return ConversionError.ConversionFailed;
 
@@ -61,7 +61,7 @@ fn multi_converter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
 
 fn flag_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     return struct {
-        pub fn handler(_: *gen.UserContext, input: []const u8, _: ErrorWriter) ConversionError!bool {
+        pub fn handler(_: gen.UserContext, input: []const u8, _: ErrorWriter) ConversionError!bool {
             // treat an empty string as falsy
             if (input.len == 0) return false;
 
@@ -81,7 +81,7 @@ fn flag_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
 
 fn string_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     return struct {
-        pub fn handler(_: *gen.UserContext, input: []const u8, _: ErrorWriter) ConversionError![]const u8 {
+        pub fn handler(_: gen.UserContext, input: []const u8, _: ErrorWriter) ConversionError![]const u8 {
             return input;
         }
     }.handler;
@@ -91,9 +91,8 @@ fn int_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     const IntType = gen.OutputType;
 
     return struct {
-        pub fn handler(_: *gen.UserContext, input: []const u8, failure: ErrorWriter) ConversionError!IntType {
+        pub fn handler(_: gen.UserContext, input: []const u8, failure: ErrorWriter) ConversionError!IntType {
             return std.fmt.parseInt(IntType, input, 0) catch {
-                // ignore the error
                 try failure.print("cannot interpret \"{s}\" as an integer", .{input});
                 return ConversionError.ConversionFailed;
             };
@@ -107,7 +106,7 @@ fn struct_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     const Intermediate = gen.IntermediateType();
 
     return struct {
-        pub fn handler(context: *gen.UserContext, input: Intermediate, failure: ErrorWriter) ConversionError!StructType {
+        pub fn handler(context: gen.UserContext, input: Intermediate, failure: ErrorWriter) ConversionError!StructType {
             if (input.items.len != type_info.fields.len) {
                 try failure.print(
                     "Wrong number of fields provided. Got {d}, needed {d}",
@@ -138,7 +137,7 @@ fn choice_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     const EnumType = gen.OutputType;
 
     return struct {
-        pub fn handler(_: *gen.UserContext, input: []const u8, failure: ErrorWriter) ConversionError!EnumType {
+        pub fn handler(_: gen.UserContext, input: []const u8, failure: ErrorWriter) ConversionError!EnumType {
             return std.meta.stringToEnum(gen.ConvertedType(), input) orelse {
                 try failure.print("\"{s}\" is not a valid choice", .{input});
                 return ConversionError.ConversionFailed;

@@ -37,7 +37,9 @@ pub const ParserInterface = struct {
 };
 
 fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
-    return if (@typeInfo(UserContext) == .Void) struct {
+    const CtxInfo = @typeInfo(UserContext);
+
+    return if (CtxInfo == .Void) struct {
         pub fn interface(self: *ParserType) ParserInterface {
             return .{
                 .parser = self,
@@ -50,11 +52,15 @@ fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
                 },
             };
         }
-    } else struct {
-        pub fn interface(self: *ParserType, context: *UserContext) ParserInterface {
+
+        fn cast_context(_: *anyopaque) void {
+            return void{};
+        }
+    } else if (CtxInfo == .Pointer and CtxInfo.Pointer.size != .Slice) struct {
+        pub fn interface(self: *ParserType, context: UserContext) ParserInterface {
             return .{
                 .parser = self,
-                .context = context,
+                .context = @ptrCast(*anyopaque, @constCast(context)),
                 .methods = &.{
                     .execute = ParserType.wrap_execute,
                     .parse = ParserType.wrap_parse,
@@ -62,6 +68,27 @@ fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
                     .describe = ParserType.describe,
                 },
             };
+        }
+
+        fn cast_context(ctx: *anyopaque) UserContext {
+            return @ptrCast(UserContext, @alignCast(std.meta.alignment(UserContext), ctx));
+        }
+    } else struct {
+        pub fn interface(self: *ParserType, context: *const UserContext) ParserInterface {
+            return .{
+                .parser = self,
+                .context = @ptrCast(*anyopaque, @constCast(context)),
+                .methods = &.{
+                    .execute = ParserType.wrap_execute,
+                    .parse = ParserType.wrap_parse,
+                    .finish = ParserType.wrap_finish,
+                    .describe = ParserType.describe,
+                },
+            };
+        }
+
+        fn cast_context(ctx: *anyopaque) UserContext {
+            return @ptrCast(*const UserContext, @alignCast(@alignOf(UserContext), ctx)).*;
         }
     };
 }
@@ -93,35 +120,31 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
         // This is a slightly annoying hack to work around the fact that there's no way to
         // provide a method signature conditionally.
-        pub usingnamespace InterfaceGen(@This(), UserContext);
+        const Interface = InterfaceGen(@This(), UserContext);
+        pub usingnamespace Interface;
+
+        inline fn cast_interface_parser(parser: *anyopaque) *@This() {
+            return @ptrCast(*@This(), @alignCast(@alignOf(@This()), parser));
+        }
 
         fn wrap_execute(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
-            const self = @ptrCast(*@This(), @alignCast(@alignOf(*@This()), parser));
+            const self = cast_interface_parser(parser);
 
             // this is a slightly annoying hack to work around the problem that void has
             // 0 alignment, which alignCast chokes on.
-            const context = if (@alignOf(UserContext) > 0)
-                @ptrCast(*UserContext, @alignCast(@alignOf(UserContext), ctx))
-            else
-                @ptrCast(*UserContext, ctx);
+            const context = Interface.cast_context(ctx);
             return try self.execute(context);
         }
 
         fn wrap_parse(parser: *anyopaque, ctx: *anyopaque, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
-            const self = @ptrCast(*@This(), @alignCast(@alignOf(@This()), parser));
-            const context = if (@alignOf(UserContext) > 0)
-                @ptrCast(*UserContext, @alignCast(@alignOf(UserContext), ctx))
-            else
-                @ptrCast(*UserContext, ctx);
+            const self = cast_interface_parser(parser);
+            const context = Interface.cast_context(ctx);
             return try self.subparse(context, name, args, env);
         }
 
         fn wrap_finish(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
-            const self = @ptrCast(*@This(), @alignCast(@alignOf(@This()), parser));
-            const context = if (@alignOf(UserContext) > 0)
-                @ptrCast(*UserContext, @alignCast(@alignOf(UserContext), ctx))
-            else
-                @ptrCast(*UserContext, ctx);
+            const self = cast_interface_parser(parser);
+            const context = Interface.cast_context(ctx);
             return try self.finish(context);
         }
 
@@ -129,7 +152,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return command.description;
         }
 
-        pub fn subparse(self: *@This(), context: *UserContext, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
+        pub fn subparse(self: *@This(), context: UserContext, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
             const sliceto = try self.parse(name, args);
             try self.read_environment(env);
             try self.convert_eager(context);
@@ -149,13 +172,13 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        pub fn finish(self: *@This(), context: *UserContext) anyerror!void {
+        pub fn finish(self: *@This(), context: UserContext) anyerror!void {
             try self.convert(context);
             try callback(context, self.output);
             if (self.subcommand) |verb| try verb.finish();
         }
 
-        pub fn execute(self: *@This(), context: *UserContext) anyerror!void {
+        pub fn execute(self: *@This(), context: UserContext) anyerror!void {
             const args = try std.process.argsAlloc(self.allocator);
             defer std.process.argsFree(self.allocator, args);
             var env = try std.process.getEnvMap(self.allocator);
@@ -410,7 +433,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        fn convert_eager(self: *@This(), context: *UserContext) NoclipError!void {
+        fn convert_eager(self: *@This(), context: UserContext) NoclipError!void {
             inline for (comptime parameters) |param| {
                 if (comptime param.eager) {
                     try self.convert_param(param, context);
@@ -418,7 +441,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        fn convert(self: *@This(), context: *UserContext) NoclipError!void {
+        fn convert(self: *@This(), context: UserContext) NoclipError!void {
             inline for (comptime parameters) |param| {
                 if (comptime !param.eager) {
                     try self.convert_param(param, context);
@@ -426,7 +449,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        fn convert_param(self: *@This(), comptime param: anytype, context: *UserContext) NoclipError!void {
+        fn convert_param(self: *@This(), comptime param: anytype, context: UserContext) NoclipError!void {
             if (@field(self.intermediate, param.name)) |intermediate| {
                 var buffer = std.ArrayList(u8).init(self.allocator);
                 const writer = buffer.writer();

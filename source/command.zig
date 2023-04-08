@@ -241,7 +241,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
         }
 
         pub fn CallbackSignature(comptime self: @This()) type {
-            return *const fn (*UserContext, self.Output()) anyerror!void;
+            return *const fn (UserContext, self.Output()) anyerror!void;
         }
 
         pub fn Output(comptime self: @This()) type {
