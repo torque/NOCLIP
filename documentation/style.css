@@ -145,6 +145,18 @@ body .layout .doc .doc-padding {
     max-width: 100%;
 }
 
+body .layout .doc .doc-padding::after {
+    bottom: -40vh;
+    color: var(--gray-1);
+    content: 'THIS OVERSCROLL INTENTIONALLY LEFT BLANK';
+    display: block;
+    font-size: 30px;
+    font-weight: bold;
+    position: relative;
+    text-align: center;
+    width: 100%;
+}
+
 body .layout .doc section {
     display: grid;
     grid-template-columns: minmax(var(--description-min-width), var(--description-max-width)) minmax(var(--example-min-width), 1fr);
@@ -161,6 +173,18 @@ body .layout .doc section .header {
 /*    position: sticky;*/
 /*    top: 0;*/
 /*    border-bottom: 1px solid var(--border-color);*/
+}
+
+body .layout .doc section .header::before {
+    content: "#";
+    display: inline-block;
+    visibility: hidden;
+    margin-right: 0.3em;
+    color: var(--gray-3);
+}
+
+body .layout .doc section .header:hover::before {
+    visibility: visible;
 }
 
 body .layout .doc section .description {
@@ -267,7 +291,8 @@ body .layout .doc section .example .code-markup .line {
         margin: auto;
     }
 
-    body .layout .doc section .example .codebox {
+    body .layout .doc section .example .codebox,
+    body .layout:has(> .sidebar #destroyer-of-navs:checked) .doc section .example .codebox {
         max-width: 100vw;
     }
 }
