@@ -83,13 +83,8 @@ fn write_whitespace(out: anytype, input: []const u8) !void {
 }
 
 // TODO: use more context to get better token resolution
-// identifier preceded by (break | continue) colon is a label
-// identifier followed by colon (inline | for | while | l_brace) is a label
 //
 // identifier preceded by dot, not preceded by name, and followed by (, | => | == | != | rbrace | rparen | and | or | ;) is an enum literal
-// identifier preceded by dot and followed by = is a struct field initializer
-//
-// true, false, null are not keywords but we should be able to treat them as literals. They should all be tokenized as identifiers
 //
 // identifier followed by ( is always a function call
 //
@@ -113,6 +108,8 @@ const TokenClass = enum {
     doc_comment,
     literal_primitive,
     literal_number,
+    literal_enum,
+    field_name,
     symbology,
     whitespace,
     context_free,
@@ -124,6 +121,8 @@ const TokenClass = enum {
             .doc_comment => "doc comment",
             .literal_primitive => "literal primitive",
             .literal_number => "literal number",
+            .literal_enum => "literal enum",
+            .field_name => "field-name",
             .symbology => "",
             .context_free => "",
             .whitespace => "",
@@ -217,6 +216,7 @@ pub const ContextManager = struct {
         return (contextualize_function(tokens, current) or
             contextualize_builtin_type(tokens, current) or
             contextualize_label(tokens, current) or
+            contextualize_struct_field(tokens, current) or
             contextualize_fallback(tokens, current));
     }
 
@@ -224,6 +224,11 @@ pub const ContextManager = struct {
         const prev = prev_valid(tokens, current) orelse return false;
 
         if (tokens[prev].tag == .keyword_fn) {
+            tokens[current].class = .function;
+            return true;
+        }
+
+        if (current < tokens.len - 1 and tokens[current + 1].tag == .l_paren) {
             tokens[current].class = .function;
             return true;
         }
@@ -285,6 +290,25 @@ pub const ContextManager = struct {
                     else => break :blk,
                 }
             }
+        }
+
+        return false;
+    }
+
+    fn contextualize_struct_field(tokens: []ContextToken, current: usize) bool {
+        if (current == 0) return false;
+        if (tokens[current - 1].tag != .period) return false;
+
+        const precursor = prev_valid(tokens, current - 1) orelse return false;
+        const succesor = next_valid(tokens, current) orelse return false;
+
+        if ((tokens[precursor].tag == .l_brace or
+            tokens[precursor].tag == .comma) and
+            tokens[succesor].tag == .equal)
+        {
+            tokens[current - 1].class = .field_name;
+            tokens[current].class = .field_name;
+            return true;
         }
 
         return false;
@@ -618,6 +642,44 @@ fn getTokenLocation(src: []const u8, token: std.zig.Token) Location {
     return loc;
 }
 
+pub fn tokenize_buffer(
+    buffer: []const u8,
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    full_html: bool,
+) !void {
+    const intermediate = try allocator.dupeZ(u8, buffer);
+    defer allocator.free(intermediate);
+
+    try write_tokenized_html(intermediate, allocator, writer, full_html);
+}
+
+pub fn tokenize_file(
+    file_name: []const u8,
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    full_html: bool,
+) !void {
+    const srcbuf = blk: {
+        const file = fs.cwd().openFile(file_name, .{ .mode = .read_only }) catch |err| {
+            std.debug.print("couldnt open {s}\n", .{file_name});
+            return err;
+        };
+        defer file.close();
+
+        break :blk try file.readToEndAllocOptions(
+            allocator,
+            1_000_000,
+            null,
+            @alignOf(u8),
+            0,
+        );
+    };
+    defer allocator.free(srcbuf);
+
+    try write_tokenized_html(srcbuf, allocator, writer, full_html);
+}
+
 const html_preamble =
     \\<!DOCTYPE html>
     \\<html>
@@ -666,7 +728,7 @@ const html_epilogue =
 ;
 
 const tokenator = cmd: {
-    var cmd = noclip.CommandBuilder(TokCtx){
+    var cmd = noclip.CommandBuilder(*TokCtx){
         .description =
         \\Tokenize one or more zig files into HTML.
         \\
@@ -702,41 +764,29 @@ const TokCtx = struct {
     allocator: std.mem.Allocator,
 };
 
-fn tokenize_files(context: *TokCtx, parameters: tokenator.Output()) !void {
+fn tokenize_files_cli(context: *TokCtx, parameters: tokenator.Output()) !void {
     const stdout = std.io.getStdOut().writer();
 
     for (parameters.files.items) |file_name| {
-        const srcbuf = blk: {
-            const file = try fs.cwd().openFile(file_name, .{ .mode = .read_only });
-            defer file.close();
-
-            break :blk try file.readToEndAllocOptions(
-                context.allocator,
-                1_000_000,
-                null,
-                @alignOf(u8),
-                0,
-            );
-        };
-        defer context.allocator.free(srcbuf);
-
         if (parameters.write_stdout) {
-            try write_tokenized_html(srcbuf, context.allocator, stdout, parameters.full);
+            try tokenize_file(file_name, context.allocator, stdout, parameters.full);
             try stdout.writeByte(0);
         } else {
             const outname = try std.mem.join(context.allocator, ".", &[_][]const u8{ file_name, "html" });
-            print("writing: {s}\n", .{outname});
             defer context.allocator.free(outname);
-
             const output = try fs.cwd().createFile(outname, .{});
             defer output.close();
 
-            try write_tokenized_html(srcbuf, context.allocator, output.writer(), parameters.full);
+            print("writing: {s}", .{outname});
+            errdefer print(" failed!\n", .{});
+
+            try tokenize_file(file_name, context.allocator, output.writer(), parameters.full);
+            print(" done\n", .{});
         }
     }
 }
 
-pub fn main() !u8 {
+pub fn cli() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -746,7 +796,7 @@ pub fn main() !u8 {
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
 
-    var cli_parser = tokenator.create_parser(tokenize_files, arena.allocator());
+    var cli_parser = tokenator.create_parser(tokenize_files_cli, arena.allocator());
     try cli_parser.execute(&ctx);
 
     return 0;
