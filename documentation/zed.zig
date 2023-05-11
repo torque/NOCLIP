@@ -1,4 +1,12 @@
 const std = @import("std");
+const noclip = @import("noclip");
+const tokenator = @import("./tokenator.zig");
+
+const cmark = @cImport({
+    @cInclude("cmark.h");
+    @cInclude("cmark_version.h");
+    @cInclude("cmark_export.h");
+});
 
 const Directive = enum {
     section,
@@ -245,19 +253,39 @@ const DirectiveLine = union(Directive) {
     }
 };
 
-const Body = union(enum) {
-    in_line: []const u8,
-    include: []const u8,
-};
+fn slugify(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
+    const buf = try allocator.alloc(u8, source.len);
+    for (source, 0..) |char, idx| {
+        if (std.ascii.isAlphanumeric(char)) {
+            buf[idx] = std.ascii.toLower(char);
+        } else {
+            buf[idx] = '-';
+        }
+    }
 
-const Example = struct {
-    format: ExampleFormat,
-    body: Body,
-};
+    return buf;
+}
 
 const Section = struct {
     name: []const u8,
+    id: []const u8,
     segments: []const Segment,
+
+    fn emit(self: Section, allocator: std.mem.Allocator, writer: anytype) !void {
+        try writer.print(
+            \\<section>
+            \\<div id="{s}" class = "header">{s}</div>
+            \\
+        , .{ self.id, self.name });
+
+        for (self.segments) |segment| {
+            switch (segment) {
+                inline else => |seg| try seg.emit(allocator, writer),
+            }
+        }
+
+        try writer.writeAll("</section>");
+    }
 };
 
 const Segment = union(enum) {
@@ -265,9 +293,68 @@ const Segment = union(enum) {
     example: Example,
 };
 
+const Example = struct {
+    format: ExampleFormat,
+    body: Body,
+    fn emit(self: Example, allocator: std.mem.Allocator, writer: anytype) !void {
+        try writer.writeAll(
+            \\<div class="example">
+            \\<div class="codebox">
+            \\
+        );
+        switch (self.format) {
+            .zig => switch (self.body) {
+                .in_line => |buf| try tokenator.tokenize_buffer(buf, allocator, writer, false),
+                .include => |fln| try tokenator.tokenize_file(fln, allocator, writer, false),
+            },
+            .console => switch (self.body) {
+                .in_line => |buf| try writer.print(
+                    \\<pre class="code-markup"><code class="lang-console">{s}</code></pre>
+                    \\
+                , .{std.mem.trim(u8, buf, " \n")}),
+                .include => @panic("included console example not supported"),
+            },
+        }
+        try writer.writeAll(
+            \\</div>
+            \\</div>
+            \\
+        );
+    }
+};
+
 const Description = struct {
     format: DescriptionFormat,
     body: Body,
+
+    fn emit(self: Description, allocator: std.mem.Allocator, writer: anytype) !void {
+        try writer.writeAll(
+            \\<div class="description">
+            \\
+        );
+
+        _ = allocator;
+        switch (self.format) {
+            .markdown => switch (self.body) {
+                .in_line => |buf| {
+                    const converted = cmark.cmark_markdown_to_html(buf.ptr, buf.len, 0);
+                    if (converted == null) return error.OutOfMemory;
+                    try writer.writeAll(std.mem.sliceTo(converted, 0));
+                },
+                .include => |fln| {
+                    _ = fln;
+                    @panic("include description not implemented");
+                },
+            },
+        }
+
+        try writer.writeAll("</div>\n");
+    }
+};
+
+const Body = union(enum) {
+    in_line: []const u8,
+    include: []const u8,
 };
 
 const Document = []const Section;
@@ -290,20 +377,26 @@ const ParserState = enum {
     any_directive,
 };
 
-fn slice_to_next_directive(lines: *std.mem.TokenIterator(u8)) []const u8 {
+fn slice_to_next_directive(lines: *std.mem.TokenIterator(u8)) ![]const u8 {
     const start = lines.index + 1;
+
+    // the directive is the last line in the file
+    if (start >= lines.buffer.len) return "";
+
     while (lines.peek()) |line| : (_ = lines.next()) {
-        // this approach is likely too sloppy
         if (DirectiveLine.from_line(line)) |_| {
             return lines.buffer[start..lines.index];
-        } else |_| {}
+        } else |err| switch (err) {
+            error.ExpectedDirectivePrefix => {},
+            else => return err,
+        }
     }
 
     // we hit EOF
     return lines.buffer[start..lines.buffer.len];
 }
 
-pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
+pub fn parse(allocator: std.mem.Allocator, input: []const u8, directory: []const u8) !Document {
     var lines = std.mem.tokenize(u8, input, "\n");
 
     var doc_builder = std.ArrayList(Section).init(allocator);
@@ -311,7 +404,11 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
 
     var state: ParserState = .section_or_include;
 
-    var current_section: Section = undefined;
+    var current_section: Section = .{
+        .name = undefined,
+        .id = undefined,
+        .segments = undefined,
+    };
 
     while (lines.next()) |line| {
         const dline = try DirectiveLine.from_line(line);
@@ -319,11 +416,12 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
             .section_or_include => switch (dline) {
                 .section => |sline| {
                     current_section.name = sline.name;
+                    current_section.id = try slugify(allocator, sline.name);
                     state = .any_directive;
                 },
                 .include => |iline| {
                     // read the file at iline.path
-                    const doc = try parse(allocator, iline.path);
+                    const doc = try parse(allocator, iline.path, try std.fs.path.join(allocator, &[_][]const u8{directory}));
                     defer allocator.free(doc);
                     try doc_builder.appendSlice(doc);
                 },
@@ -334,9 +432,10 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
                     current_section.segments = try section_builder.toOwnedSlice();
                     try doc_builder.append(current_section);
                     current_section.name = sline.name;
+                    current_section.id = try slugify(allocator, sline.name);
                 },
                 .include => |iline| {
-                    const doc = try parse(allocator, iline.path);
+                    const doc = try parse(allocator, iline.path, try std.fs.path.join(allocator, &[_][]const u8{directory}));
                     defer allocator.free(doc);
                     try doc_builder.appendSlice(doc);
                     state = .section_or_include;
@@ -345,18 +444,18 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
                     try section_builder.append(.{ .example = .{
                         .format = exline.format,
                         .body = if (exline.include) |incl|
-                            .{ .include = incl }
+                            .{ .include = try std.fs.path.join(allocator, &[_][]const u8{ directory, incl }) }
                         else
-                            .{ .in_line = slice_to_next_directive(&lines) },
+                            .{ .in_line = try slice_to_next_directive(&lines) },
                     } });
                 },
                 .description => |desline| {
                     try section_builder.append(.{ .description = .{
                         .format = desline.format,
                         .body = if (desline.include) |incl|
-                            .{ .include = incl }
+                            .{ .include = try std.fs.path.join(allocator, &[_][]const u8{ directory, incl }) }
                         else
-                            .{ .in_line = slice_to_next_directive(&lines) },
+                            .{ .in_line = try slice_to_next_directive(&lines) },
                     } });
                 },
             },
@@ -366,6 +465,14 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Document {
     try doc_builder.append(current_section);
 
     return doc_builder.toOwnedSlice();
+}
+
+pub fn free_doc(doc: Document, allocator: std.mem.Allocator) void {
+    for (doc) |section| {
+        allocator.free(section.id);
+        allocator.free(section.segments);
+    }
+    allocator.free(doc);
 }
 
 test "parser" {
@@ -385,6 +492,8 @@ test "parser" {
         ,
     );
 
+    defer free_doc(doc, std.testing.allocator);
+
     for (doc) |section| {
         std.debug.print("section: {s}\n", .{section.name});
         for (section.segments) |seg| {
@@ -400,7 +509,103 @@ test "parser" {
             }
         }
     }
+}
 
-    for (doc) |section| std.testing.allocator.free(section.segments);
-    std.testing.allocator.free(doc);
+const pre_nav = @embedFile("./templates/pre-nav.fragment.html");
+const style = @embedFile("./templates/style.css");
+const post_nav = @embedFile("./templates/post-nav.fragment.html");
+const post_body = @embedFile("./templates/post-body.fragment.html");
+const nav_item_template =
+    \\<a href="#{s}"><div class="item">{s}</div></a>
+    \\
+;
+
+const dezed_cmd = cmd: {
+    var cmd = noclip.CommandBuilder(*ZedCtx){
+        .description =
+        \\Convert a ZED file into HTML
+        \\
+        ,
+    };
+    cmd.string_option(.{
+        .name = "output",
+        .short_tag = "-o",
+        .long_tag = "--output",
+        .description = "write output to file (- to write to stdout). If omitted, output will be written to <input>.html",
+    });
+    cmd.string_argument(.{ .name = "input" });
+    break :cmd cmd;
+};
+
+const ZedCtx = struct {
+    allocator: std.mem.Allocator,
+};
+
+fn dezed_cli(context: *ZedCtx, parameters: dezed_cmd.Output()) !void {
+    const outname = parameters.output orelse if (std.mem.eql(u8, parameters.input, "-"))
+        "-"
+    else
+        try std.mem.join(
+            context.allocator,
+            ".",
+            &[_][]const u8{ parameters.input, "html" },
+        );
+
+    // this theoretically leaks the file handle, though we should be able to extract it
+    // from the reader/writer
+    const input = blk: {
+        if (std.mem.eql(u8, parameters.input, "-")) {
+            break :blk std.io.getStdIn().reader();
+        } else {
+            break :blk (try std.fs.cwd().openFile(parameters.input, .{ .mode = .read_only })).reader();
+        }
+    };
+
+    const output = blk: {
+        if (std.mem.eql(u8, outname, "-")) {
+            break :blk std.io.getStdOut().writer();
+        } else {
+            break :blk (try std.fs.cwd().createFile(outname, .{})).writer();
+        }
+    };
+
+    const cwd = try std.process.getCwdAlloc(context.allocator);
+    const filedir = try std.fs.path.join(context.allocator, &[_][]const u8{ cwd, std.fs.path.dirname(outname) orelse return error.OutOfMemory });
+
+    const data = try input.readAllAlloc(context.allocator, 1_000_000);
+    const doc = try parse(context.allocator, data, filedir);
+    defer free_doc(doc, context.allocator);
+
+    try output.print(pre_nav, .{ "NOCLIP", style });
+
+    for (doc) |section| {
+        try output.print(nav_item_template, .{ section.id, section.name });
+    }
+
+    try output.writeAll(post_nav);
+
+    for (doc) |section| {
+        try section.emit(context.allocator, output);
+    }
+
+    try output.writeAll(post_body);
+}
+
+pub fn cli() !u8 {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    var ctx: ZedCtx = .{ .allocator = arena.allocator() };
+
+    var cli_parser = dezed_cmd.create_parser(dezed_cli, ctx.allocator);
+    try cli_parser.execute(&ctx);
+
+    return 0;
+}
+
+pub fn main() !u8 {
+    return try cli();
 }

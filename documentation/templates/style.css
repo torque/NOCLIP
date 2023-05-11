@@ -140,6 +140,22 @@ body .layout .doc {
     overflow-y: scroll;
 }
 
+a {
+    text-decoration: none;
+    font-weight: bold;
+    color: var(--blue);
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+p code {
+    background: var(--sidebar-color);
+    color: var(--gray-4);
+/*    border-radius: 10px;*/
+}
+
 body .layout .doc .doc-padding {
     padding-bottom: 80vh;
     max-width: 100%;
@@ -230,7 +246,10 @@ body .layout .doc section .example .code-markup .line {
 .code-markup .string { color: var(--green); }
 .code-markup .comment { color: var(--gray-3); }
 .code-markup .literal { color: var(--orange); }
-.code-markup .name { color: var(--red); }
+.code-markup .label { color: var(--yellow); }
+.code-markup .field-name { color: var(--red); }
+.code-markup .variable { color: var(--red); }
+.code-markup .function { color: var(--blue); }
 
 /*It turns out these have to come after the directives they override.*/
 @media (max-width: 1820px) {
