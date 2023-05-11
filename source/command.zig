@@ -113,7 +113,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             else
                 cfg;
 
-            self.add_option(string_generics.opt_gen(), config);
+            self.add_option(string_generics, config);
         }
 
         pub fn string_argument(
@@ -125,7 +125,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             else
                 cfg;
 
-            self.add_argument(string_generics.arg_gen(), config);
+            self.add_argument(string_generics, config);
         }
 
         pub fn simple_flag(
