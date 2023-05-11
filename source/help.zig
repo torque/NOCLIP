@@ -226,8 +226,8 @@ pub fn HelpBuilder(comptime command: anytype) type {
             defer pairs.deinit();
 
             var just: usize = 0;
-            for (comptime help_info.arguments) |arg| {
-                if (arg.description.len == 0) continue;
+           inline for (comptime help_info.arguments) |arg| {
+                if (comptime arg.description.len == 0) continue;
 
                 const pair: AlignablePair = .{
                     .left = arg.name,
@@ -248,7 +248,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             defer pairs.deinit();
 
             var just: usize = 0;
-            for (comptime help_info.options) |opt| {
+            inline for (help_info.options) |opt| {
                 const pair = try self.describe_option(opt);
                 if (pair.left.len > just) just = pair.left.len;
                 try pairs.append(pair);
@@ -260,7 +260,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             };
         }
 
-        fn describe_option(self: @This(), opt: OptHelp) !AlignablePair {
+        fn describe_option(self: @This(), comptime opt: OptHelp) !AlignablePair {
             var buffer = std.ArrayList(u8).init(self.writebuffer.allocator);
             defer buffer.deinit();
             const writer = buffer.writer();
