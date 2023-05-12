@@ -74,6 +74,6 @@ fn zed(b: *std.build.Builder, target: anytype, optimize: anytype) void {
         .optimize = optimize,
     });
 
-    const runcmd = tests.run();
+    const runcmd = b.addRunArtifact(tests);
     test_step.dependOn(&runcmd.step);
 }
