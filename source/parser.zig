@@ -274,7 +274,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return 0;
         }
 
-        inline fn parse_long_tag(
+        fn parse_long_tag(
             self: *@This(),
             name: []const u8,
             arg: []const u8,
@@ -304,7 +304,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return ParseError.UnknownLongTagParameter;
         }
 
-        inline fn parse_short_tag(
+        fn parse_short_tag(
             self: *@This(),
             name: []const u8,
             arg: u8,
@@ -334,7 +334,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return ParseError.UnknownShortTagParameter;
         }
 
-        inline fn parse_ordinals(
+        fn parse_ordinals(
             self: *@This(),
             arg: []const u8,
             argit: *ncmeta.SliceIterator([][:0]u8),
@@ -360,7 +360,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return self.subcommands.get(arg) orelse ParseError.ExtraValue;
         }
 
-        inline fn push_intermediate_value(
+        fn push_intermediate_value(
             self: *@This(),
             comptime param: anytype,
             // @TypeOf(param).G.IntermediateValue() should work but appears to trigger a
@@ -381,7 +381,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        inline fn apply_param_values(
+        fn apply_param_values(
             self: *@This(),
             comptime param: anytype,
             argit: anytype,
@@ -410,7 +410,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        inline fn apply_fused_values(
+        fn apply_fused_values(
             self: *@This(),
             comptime param: anytype,
             value: []const u8,
