@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target: std.Build.CrossTarget = b.standardTargetOptions(.{});
+    const target: std.zig.CrossTarget = b.standardTargetOptions(.{});
     const optimize: std.builtin.Mode = b.standardOptimizeOption(.{});
 
     const noclip = b.addModule("noclip", .{
@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&tests.step);
 }
 
-fn demo(b: *std.Build, noclip: *std.Build.Module, target: std.Build.CrossTarget, optimize: std.builtin.Mode) void {
+fn demo(b: *std.Build, noclip: *std.Build.Module, target: std.zig.CrossTarget, optimize: std.builtin.Mode) void {
     const demo_step = b.step("demo", "Build and install CLI demo program");
 
     const exe = b.addExecutable(.{
