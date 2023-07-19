@@ -30,7 +30,7 @@ pub fn UpdateDefaults(comptime input: type, comptime defaults: anytype) type {
                 // the appropriate type, which is nice for ergonomics. Not sure
                 // if it introduces weird edge cases. Probably it's fine?
                 .default_value = if (@hasField(@TypeOf(defaults), field.name))
-                    @ptrCast(?*const anyopaque, &@as(field.field_type, @field(defaults, field.name)))
+                    @ptrCast(&@as(field.field_type, @field(defaults, field.name)))
                 else
                     field.default_value,
                 .is_comptime = field.is_comptime,
@@ -203,7 +203,7 @@ pub const TupleBuilder = struct {
     }
 
     pub fn retrieve(comptime self: @This(), comptime index: comptime_int) self.types[index] {
-        return @ptrCast(*const self.types[index], @alignCast(@alignOf(*const self.types[index]), self.pointers[index])).*;
+        return @as(*const self.types[index], @ptrCast(@alignCast(self.pointers[index]))).*;
     }
 
     pub fn realTuple(comptime self: @This()) self.TupleType() {

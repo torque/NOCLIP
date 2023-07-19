@@ -297,15 +297,15 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     if (PType.is_flag) {
                         var peek = idx + 1;
                         var bias_seen: [ncmeta.enum_length(FlagBias)]bool = [_]bool{false} ** ncmeta.enum_length(FlagBias);
-                        bias_seen[@enumToInt(param.flag_bias)] = true;
+                        bias_seen[@intFromEnum(param.flag_bias)] = true;
                         while (peek < spec.len) : (peek += 1) {
                             const peek_param = spec[peek];
 
                             if (@TypeOf(peek_param).is_flag and std.mem.eql(u8, param.name, peek_param.name)) {
-                                if (bias_seen[@enumToInt(peek_param.flag_bias)] == true) {
+                                if (bias_seen[@intFromEnum(peek_param.flag_bias)] == true) {
                                     @compileError("redundant flag!!!! " ++ param.name);
                                 } else {
-                                    bias_seen[@enumToInt(peek_param.flag_bias)] = true;
+                                    bias_seen[@intFromEnum(peek_param.flag_bias)] = true;
                                 }
                                 flag_skip += 1;
                             } else {
@@ -372,15 +372,15 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     if (PType.is_flag) {
                         var peek = idx + 1;
                         var bias_seen: [ncmeta.enum_length(FlagBias)]bool = [_]bool{false} ** ncmeta.enum_length(FlagBias);
-                        bias_seen[@enumToInt(param.flag_bias)] = true;
+                        bias_seen[@intFromEnum(param.flag_bias)] = true;
                         while (peek < spec.len) : (peek += 1) {
                             const peek_param = spec[peek];
 
                             if (@TypeOf(peek_param).is_flag and std.mem.eql(u8, param.name, peek_param.name)) {
-                                if (bias_seen[@enumToInt(peek_param.flag_bias)] == true) {
+                                if (bias_seen[@intFromEnum(peek_param.flag_bias)] == true) {
                                     @compileError("redundant flag!!!! " ++ param.name);
                                 } else {
-                                    bias_seen[@enumToInt(peek_param.flag_bias)] = true;
+                                    bias_seen[@intFromEnum(peek_param.flag_bias)] = true;
                                 }
                                 flag_skip += 1;
                             } else {
@@ -397,13 +397,10 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     fields = &(@as([fields.len]StructField, fields[0..fields.len].*) ++ [1]StructField{.{
                         .name = param.name,
                         .type = FieldType,
-                        .default_value = @ptrCast(
-                            ?*const anyopaque,
-                            &@as(
-                                FieldType,
-                                if (PType.value_count == .count) 0 else null,
-                            ),
-                        ),
+                        .default_value = @ptrCast(&@as(
+                            FieldType,
+                            if (PType.value_count == .count) 0 else null,
+                        )),
                         .is_comptime = false,
                         .alignment = @alignOf(?[]const u8),
                     }});

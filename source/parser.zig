@@ -60,7 +60,7 @@ fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
         pub fn interface(self: *ParserType, context: UserContext) ParserInterface {
             return .{
                 .parser = self,
-                .context = @ptrCast(*anyopaque, @constCast(context)),
+                .context = @ptrCast(@constCast(context)),
                 .methods = &.{
                     .execute = ParserType.wrap_execute,
                     .parse = ParserType.wrap_parse,
@@ -71,13 +71,13 @@ fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
         }
 
         fn cast_context(ctx: *anyopaque) UserContext {
-            return @ptrCast(UserContext, @alignCast(std.meta.alignment(UserContext), ctx));
+            return @ptrCast(@alignCast(ctx));
         }
     } else struct {
         pub fn interface(self: *ParserType, context: *const UserContext) ParserInterface {
             return .{
                 .parser = self,
-                .context = @ptrCast(*anyopaque, @constCast(context)),
+                .context = @ptrCast(@constCast(context)),
                 .methods = &.{
                     .execute = ParserType.wrap_execute,
                     .parse = ParserType.wrap_parse,
@@ -88,7 +88,7 @@ fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
         }
 
         fn cast_context(ctx: *anyopaque) UserContext {
-            return @ptrCast(*const UserContext, @alignCast(@alignOf(UserContext), ctx)).*;
+            return @as(*const UserContext, @ptrCast(@alignCast(ctx))).*;
         }
     };
 }
@@ -124,7 +124,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         pub usingnamespace Interface;
 
         inline fn cast_interface_parser(parser: *anyopaque) *@This() {
-            return @ptrCast(*@This(), @alignCast(@alignOf(@This()), parser));
+            return @ptrCast(@alignCast(parser));
         }
 
         fn wrap_execute(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
