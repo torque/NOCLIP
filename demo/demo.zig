@@ -62,10 +62,6 @@ const cli = cmd: {
         .env_var = "NOCLIP_ENVIRON",
         .description = "environment variable only option",
     });
-    cmd.add_argument(.{ .OutputType = []const u8 }, .{
-        .name = "arg",
-        .description = "This is an argument that doesn't really do anything, but it's very important.",
-    });
 
     break :cmd cmd;
 };
@@ -73,9 +69,9 @@ const cli = cmd: {
 const subcommand = cmd: {
     var cmd = CommandBuilder([]const u8){
         .description =
-        \\Perform some sort of work
+        \\Demonstrate subcommand functionality
         \\
-        \\This subcommand is a mystery. It probably does something, but nobody is sure what.
+        \\This command demonstrates how subcommands work.
         ,
     };
     cmd.simple_flag(.{
@@ -85,6 +81,10 @@ const subcommand = cmd: {
         .env_var = "NOCLIP_SUBFLAG",
     });
     cmd.add_argument(.{ .OutputType = []const u8 }, .{ .name = "argument" });
+    cmd.add_argument(.{ .OutputType = []const u8 }, .{
+        .name = "arg",
+        .description = "This is an argument that doesn't really do anything, but it's very important.",
+    });
     break :cmd cmd;
 };
 
@@ -101,15 +101,17 @@ fn cli_handler(context: *u32, result: cli.Output()) !void {
 }
 
 pub fn main() !u8 {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    var parser = cli.create_parser(cli_handler, allocator);
+    var parser = try cli.create_parser(cli_handler, allocator);
+    defer parser.deinitTree();
+
     var context: u32 = 2;
     const sc: []const u8 = "whassup";
 
-    var subcon = subcommand.create_parser(sub_handler, allocator);
+    var subcon = try subcommand.create_parser(sub_handler, allocator);
     try parser.add_subcommand("verb", subcon.interface(&sc));
 
     const iface = parser.interface(&context);

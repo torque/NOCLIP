@@ -87,11 +87,17 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             comptime self: @This(),
             comptime callback: self.CallbackSignature(),
             allocator: std.mem.Allocator,
-        ) Parser(self, callback) {
+        ) !Parser(self, callback) {
+            // note: this is freed in Parser.deinit
+            var arena = try allocator.create(std.heap.ArenaAllocator);
+            arena.* = std.heap.ArenaAllocator.init(allocator);
+            const arena_alloc = arena.allocator();
+
             return Parser(self, callback){
-                .allocator = allocator,
-                .subcommands = std.hash_map.StringHashMap(ParserInterface).init(allocator),
-                .help_builder = help.HelpBuilder(self).init(allocator),
+                .arena = arena,
+                .allocator = arena_alloc,
+                .subcommands = std.hash_map.StringHashMap(ParserInterface).init(arena_alloc),
+                .help_builder = help.HelpBuilder(self).init(arena_alloc),
             };
         }
 
