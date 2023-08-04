@@ -358,7 +358,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     fields = fields ++ &[_]StructField{.{
                         .name = param.name,
                         .type = FieldType,
-                        .default_value = default,
+                        .default_value = @ptrCast(default),
                         .is_comptime = false,
                         .alignment = @alignOf(FieldType),
                     }};
