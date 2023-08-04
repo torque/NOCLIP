@@ -226,7 +226,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             defer pairs.deinit();
 
             var just: usize = 0;
-           inline for (comptime help_info.arguments) |arg| {
+            inline for (comptime help_info.arguments) |arg| {
                 if (comptime arg.description.len == 0) continue;
 
                 const pair: AlignablePair = .{
@@ -471,7 +471,17 @@ pub fn opt_info(comptime command: anytype) CommandHelp {
                 // TODO: this is only acceptable for some types. It behaves poorly on
                 // enum-based choice types because it prints the whole type name rather
                 // than just the tag name. Roll our own eventually.
-                writer.print("{any}", .{def}) catch @compileError("whoah");
+                blk: {
+                    switch (@typeInfo(@TypeOf(def))) {
+                        .Pointer => |info| if (info.size == .Slice and info.child == u8) {
+                            writer.print("{s}", .{def}) catch @compileError("no");
+                            break :blk;
+                        },
+                        else => {},
+                    }
+                    writer.print("{any}", .{def}) catch @compileError("whoah");
+                }
+
                 last_option.default = buf.buffer;
             }
         }
