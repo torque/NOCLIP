@@ -101,6 +101,31 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             };
         }
 
+        pub fn create_interface(
+            comptime self: @This(),
+            comptime callback: self.CallbackSignature(),
+            allocator: std.mem.Allocator,
+            context: UserContextType,
+        ) !ParserInterface {
+            var arena = try allocator.create(std.heap.ArenaAllocator);
+            arena.* = std.heap.ArenaAllocator.init(allocator);
+            const arena_alloc = arena.allocator();
+
+            var this_parser = try arena_alloc.create(Parser(self, callback));
+            this_parser.* = .{
+                .arena = arena,
+                .allocator = arena_alloc,
+                .subcommands = std.hash_map.StringHashMap(ParserInterface).init(arena_alloc),
+                .help_builder = help.HelpBuilder(self).init(arena_alloc),
+            };
+
+            if (UserContextType == void) {
+                return this_parser.interface();
+            } else {
+                return this_parser.interface(context);
+            }
+        }
+
         pub fn set_help_flag(
             comptime self: *@This(),
             comptime tags: ShortLongPair,
