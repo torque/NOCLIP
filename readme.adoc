@@ -22,8 +22,7 @@ ____
 
 == Hello
 
-Requires a pre-release version of Zig `0.11.0`. `0.11.0-dev.1844+75ff34db9` is the
-oldest version specifically known to me to work.
+Requires Zig `0.11.x`.
 
 === Features
 
@@ -40,7 +39,7 @@ and bugs likely exist.
 * arbitrarily nestable subcommands for building sophisticated tools
 * parser that supports many conventional CLI behaviors
   ** congealed short flags (e.g. `-abc` is the same as `-a -b -c`)
-  ** `--` to force early of argument parsing
+  ** `--` to force early end of flag parsing
   ** both `--long value` and `--long=value` styles are supported
 * option values are converted into rich native types using conversion callback functions
   ** integers
