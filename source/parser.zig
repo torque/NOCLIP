@@ -12,6 +12,7 @@ pub const ParserInterface = struct {
         execute: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!void,
         parse: *const fn (parser: *anyopaque, context: *anyopaque, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!void,
         finish: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!void,
+        getChild: *const fn (parser: *anyopaque, name: []const u8) ?ParserInterface,
         describe: *const fn () []const u8,
         deinit: *const fn (parser: *anyopaque) void,
         deinitTree: *const fn (parser: *anyopaque) void,
@@ -29,6 +30,7 @@ pub const ParserInterface = struct {
                 .execute = ParserType.wrap_execute,
                 .parse = ParserType.wrap_parse,
                 .finish = ParserType.wrap_finish,
+                .getChild = ParserType.wrap_getChild,
                 .describe = ParserType.describe,
                 .deinit = ParserType.wrap_deinit,
                 .deinitTree = ParserType.wrap_deinitTree,
@@ -46,6 +48,10 @@ pub const ParserInterface = struct {
 
     pub fn finish(self: @This()) anyerror!void {
         return try self.methods.finish(self.parser, self.context);
+    }
+
+    pub fn getChild(self: @This(), name: []const u8) ?ParserInterface {
+        return self.methods.getChild(self.parser, name);
     }
 
     pub fn describe(self: @This()) []const u8 {
@@ -147,6 +153,11 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return try self.finish(context);
         }
 
+        fn wrap_getChild(parser: *anyopaque, name: []const u8) ?ParserInterface {
+            const self = cast_interface_parser(parser);
+            return self.getChild(name);
+        }
+
         fn wrap_deinit(parser: *anyopaque) void {
             const self = cast_interface_parser(parser);
             self.deinit();
@@ -198,6 +209,10 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 subcommand.deinitTree();
             }
             self.deinit();
+        }
+
+        pub fn getChild(self: @This(), name: []const u8) ?ParserInterface {
+            return self.subcommands.get(name);
         }
 
         pub fn execute(self: *@This(), context: UserContext) anyerror!void {
