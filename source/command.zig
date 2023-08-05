@@ -12,8 +12,8 @@ const OptionConfig = parameters.OptionConfig;
 const FlagConfig = parameters.FlagConfig;
 const ShortLongPair = parameters.ShortLongPair;
 const FlagBias = parameters.FlagBias;
-const make_option = parameters.make_option;
-const make_argument = parameters.make_argument;
+const makeOption = parameters.makeOption;
+const makeArgument = parameters.makeArgument;
 
 const Parser = parser.Parser;
 const ParserInterface = parser.ParserInterface;
@@ -24,7 +24,7 @@ fn BuilderGenerics(comptime UserContext: type) type {
         value_count: ValueCount = .{ .fixed = 1 },
         multi: bool = false,
 
-        pub fn arg_gen(comptime self: @This()) ParameterGenerics {
+        pub fn argGen(comptime self: @This()) ParameterGenerics {
             if (self.value_count == .flag) @compileError("argument may not be a flag");
             if (self.value_count == .count) @compileError("argument may not be a count");
 
@@ -32,12 +32,12 @@ fn BuilderGenerics(comptime UserContext: type) type {
                 .UserContext = UserContext,
                 .OutputType = self.OutputType,
                 .param_type = .Ordinal,
-                .value_count = ParameterGenerics.fixed_value_count(self.OutputType, self.value_count),
+                .value_count = ParameterGenerics.fixedValueCount(self.OutputType, self.value_count),
                 .multi = self.multi,
             };
         }
 
-        pub fn opt_gen(comptime self: @This()) ParameterGenerics {
+        pub fn optGen(comptime self: @This()) ParameterGenerics {
             if (self.value_count == .flag) @compileError("option may not be a flag");
             if (self.value_count == .count) @compileError("option may not be a count");
 
@@ -45,12 +45,12 @@ fn BuilderGenerics(comptime UserContext: type) type {
                 .UserContext = UserContext,
                 .OutputType = self.OutputType,
                 .param_type = .Nominal,
-                .value_count = ParameterGenerics.fixed_value_count(self.OutputType, self.value_count),
+                .value_count = ParameterGenerics.fixedValueCount(self.OutputType, self.value_count),
                 .multi = self.multi,
             };
         }
 
-        pub fn count_gen(comptime _: @This()) ParameterGenerics {
+        pub fn countGen(comptime _: @This()) ParameterGenerics {
             return ParameterGenerics{
                 .UserContext = UserContext,
                 .OutputType = usize,
@@ -60,7 +60,7 @@ fn BuilderGenerics(comptime UserContext: type) type {
             };
         }
 
-        pub fn flag_gen(comptime self: @This()) ParameterGenerics {
+        pub fn flagGen(comptime self: @This()) ParameterGenerics {
             return ParameterGenerics{
                 .UserContext = UserContext,
                 .OutputType = bool,
@@ -83,7 +83,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
 
         pub const UserContextType = UserContext;
 
-        pub fn create_parser(
+        pub fn createParser(
             comptime self: @This(),
             comptime callback: self.CallbackSignature(),
             allocator: std.mem.Allocator,
@@ -101,7 +101,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             };
         }
 
-        pub fn create_interface(
+        pub fn createInterface(
             comptime self: @This(),
             comptime callback: self.CallbackSignature(),
             allocator: std.mem.Allocator,
@@ -126,7 +126,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             }
         }
 
-        pub fn set_help_flag(
+        pub fn setHelpFlag(
             comptime self: *@This(),
             comptime tags: ShortLongPair,
         ) void {
@@ -135,49 +135,49 @@ pub fn CommandBuilder(comptime UserContext: type) type {
 
         const string_generics = BuilderGenerics(UserContext){ .OutputType = []const u8 };
 
-        pub fn string_option(
+        pub fn stringOption(
             comptime self: *@This(),
-            comptime cfg: OptionConfig(string_generics.opt_gen()),
+            comptime cfg: OptionConfig(string_generics.optGen()),
         ) void {
             const config = if (cfg.nice_type_name == null)
-                ncmeta.copy_struct(@TypeOf(cfg), cfg, .{ .nice_type_name = "string" })
+                ncmeta.copyStruct(@TypeOf(cfg), cfg, .{ .nice_type_name = "string" })
             else
                 cfg;
 
-            self.add_option(string_generics, config);
+            self.addOption(string_generics, config);
         }
 
-        pub fn string_argument(
+        pub fn stringArgument(
             comptime self: *@This(),
-            comptime cfg: OptionConfig(string_generics.arg_gen()),
+            comptime cfg: OptionConfig(string_generics.argGen()),
         ) void {
             const config = if (cfg.nice_type_name == null)
-                ncmeta.copy_struct(@TypeOf(cfg), cfg, .{ .nice_type_name = "string" })
+                ncmeta.copyStruct(@TypeOf(cfg), cfg, .{ .nice_type_name = "string" })
             else
                 cfg;
 
-            self.add_argument(string_generics, config);
+            self.addArgument(string_generics, config);
         }
 
-        pub fn simple_flag(
+        pub fn simpleFlag(
             comptime self: *@This(),
-            comptime cfg: FlagConfig(string_generics.flag_gen()),
+            comptime cfg: FlagConfig(string_generics.flagGen()),
         ) void {
-            self.add_flag(string_generics, cfg);
+            self.addFlag(string_generics, cfg);
         }
 
-        pub fn add_argument(
+        pub fn addArgument(
             comptime self: *@This(),
             comptime bgen: BuilderGenerics(UserContext),
-            comptime config: OptionConfig(bgen.arg_gen()),
+            comptime config: OptionConfig(bgen.argGen()),
         ) void {
-            self.param_spec.add(make_argument(bgen.arg_gen(), config));
+            self.param_spec.add(makeArgument(bgen.argGen(), config));
         }
 
-        pub fn add_option(
+        pub fn addOption(
             comptime self: *@This(),
             comptime bgen: BuilderGenerics(UserContext),
-            comptime config: OptionConfig(bgen.opt_gen()),
+            comptime config: OptionConfig(bgen.optGen()),
         ) void {
             if (comptime bgen.value_count == .fixed and bgen.value_count.fixed == 0) {
                 @compileError(
@@ -186,13 +186,13 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                 );
             }
 
-            self.param_spec.add(make_option(bgen.opt_gen(), config));
+            self.param_spec.add(makeOption(bgen.optGen(), config));
         }
 
-        pub fn add_flag(
+        pub fn addFlag(
             comptime self: *@This(),
             comptime bgen: BuilderGenerics(UserContext),
-            comptime config: FlagConfig(bgen.flag_gen()),
+            comptime config: FlagConfig(bgen.flagGen()),
         ) void {
             comptime {
                 if (config.truthy == null and config.falsy == null and config.env_var == null) {
@@ -203,7 +203,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     );
                 }
 
-                const generics = bgen.flag_gen();
+                const generics = bgen.flagGen();
                 var args = OptionConfig(generics){
                     .name = config.name,
                     //
@@ -236,7 +236,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     args.long_tag = truthy_pair.long_tag;
                     args.flag_bias = .truthy;
 
-                    self.param_spec.add(make_option(generics, args));
+                    self.param_spec.add(makeOption(generics, args));
                 }
 
                 if (config.falsy) |falsy_pair| {
@@ -252,7 +252,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     args.long_tag = falsy_pair.long_tag;
                     args.flag_bias = .falsy;
 
-                    self.param_spec.add(make_option(generics, args));
+                    self.param_spec.add(makeOption(generics, args));
                 }
 
                 if (config.env_var) |env_var| {
@@ -262,7 +262,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     args.env_var = env_var;
                     args.flag_bias = .unbiased;
 
-                    self.param_spec.add(make_option(generics, args));
+                    self.param_spec.add(makeOption(generics, args));
                 }
             }
         }
@@ -327,7 +327,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
 
                     if (PType.is_flag) {
                         var peek = idx + 1;
-                        var bias_seen: [ncmeta.enum_length(FlagBias)]bool = [_]bool{false} ** ncmeta.enum_length(FlagBias);
+                        var bias_seen: [ncmeta.enumLength(FlagBias)]bool = [_]bool{false} ** ncmeta.enumLength(FlagBias);
                         bias_seen[@intFromEnum(param.flag_bias)] = true;
                         while (peek < spec.len) : (peek += 1) {
                             const peek_param = spec[peek];
@@ -402,7 +402,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     const PType = @TypeOf(param);
                     if (PType.is_flag) {
                         var peek = idx + 1;
-                        var bias_seen: [ncmeta.enum_length(FlagBias)]bool = [_]bool{false} ** ncmeta.enum_length(FlagBias);
+                        var bias_seen: [ncmeta.enumLength(FlagBias)]bool = [_]bool{false} ** ncmeta.enumLength(FlagBias);
                         bias_seen[@intFromEnum(param.flag_bias)] = true;
                         while (peek < spec.len) : (peek += 1) {
                             const peek_param = spec[peek];

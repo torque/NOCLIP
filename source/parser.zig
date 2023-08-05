@@ -27,13 +27,13 @@ pub const ParserInterface = struct {
             .parser = parser,
             .context = context,
             .methods = &.{
-                .execute = ParserType.wrap_execute,
-                .parse = ParserType.wrap_parse,
-                .finish = ParserType.wrap_finish,
-                .getChild = ParserType.wrap_getChild,
-                .describe = ParserType.describe,
-                .deinit = ParserType.wrap_deinit,
-                .deinitTree = ParserType.wrap_deinitTree,
+                .execute = ParserType._wrapExecute,
+                .parse = ParserType._wrapParse,
+                .finish = ParserType._wrapFinish,
+                .getChild = ParserType._wrapGetChild,
+                .describe = ParserType._wrapDescribe,
+                .deinit = ParserType._wrapDeinit,
+                .deinitTree = ParserType._wrapDeinitTree,
             },
         };
     }
@@ -67,6 +67,58 @@ pub const ParserInterface = struct {
     }
 };
 
+fn InterfaceWrappers(comptime ParserType: type) type {
+    return struct {
+        inline fn castInterfaceParser(parser: *anyopaque) *ParserType {
+            return @ptrCast(@alignCast(parser));
+        }
+
+        fn _wrapExecute(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
+            const self = castInterfaceParser(parser);
+
+            const context = self.castContext(ctx);
+            return try self.execute(context);
+        }
+
+        fn _wrapParse(
+            parser: *anyopaque,
+            ctx: *anyopaque,
+            name: []const u8,
+            args: [][:0]u8,
+            env: std.process.EnvMap,
+        ) anyerror!void {
+            const self = castInterfaceParser(parser);
+            const context = self.castContext(ctx);
+            return try self.subparse(context, name, args, env);
+        }
+
+        fn _wrapFinish(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
+            const self = castInterfaceParser(parser);
+            const context = self.castContext(ctx);
+            return try self.finish(context);
+        }
+
+        fn _wrapGetChild(parser: *anyopaque, name: []const u8) ?ParserInterface {
+            const self = castInterfaceParser(parser);
+            return self.getChild(name);
+        }
+
+        fn _wrapDeinit(parser: *anyopaque) void {
+            const self = castInterfaceParser(parser);
+            self.deinit();
+        }
+
+        fn _wrapDeinitTree(parser: *anyopaque) void {
+            const self = castInterfaceParser(parser);
+            self.deinitTree();
+        }
+
+        fn _wrapDescribe() []const u8 {
+            return ParserType.command_description;
+        }
+    };
+}
+
 fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
     const CtxInfo = @typeInfo(UserContext);
 
@@ -75,7 +127,7 @@ fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
             return ParserInterface.create(ParserType, self, @constCast(&void{}));
         }
 
-        fn cast_context(_: *anyopaque) void {
+        fn castContext(_: ParserType, _: *anyopaque) void {
             return void{};
         }
     } else if (CtxInfo == .Pointer and CtxInfo.Pointer.size != .Slice) struct {
@@ -83,7 +135,7 @@ fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
             return ParserInterface.create(ParserType, self, @constCast(context));
         }
 
-        fn cast_context(ctx: *anyopaque) UserContext {
+        fn castContext(_: ParserType, ctx: *anyopaque) UserContext {
             return @ptrCast(@alignCast(ctx));
         }
     } else struct {
@@ -91,7 +143,7 @@ fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
             return ParserInterface.create(ParserType, self, @ptrCast(@constCast(context)));
         }
 
-        fn cast_context(ctx: *anyopaque) UserContext {
+        fn castContext(_: ParserType, ctx: *anyopaque) UserContext {
             return @as(*const UserContext, @ptrCast(@alignCast(ctx))).*;
         }
     };
@@ -108,6 +160,8 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
     const Output = command.Output();
 
     return struct {
+        const command_description = command.description;
+
         intermediate: Intermediate = .{},
         output: Output = undefined,
         consumed_args: u32 = 0,
@@ -119,63 +173,19 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         subcommand: ?ParserInterface = null,
         help_builder: help.HelpBuilder(command),
 
-        pub fn add_subcommand(self: *@This(), verb: []const u8, parser: ParserInterface) !void {
+        pub fn addSubcommand(self: *@This(), verb: []const u8, parser: ParserInterface) !void {
             try self.subcommands.put(verb, parser);
         }
 
         // This is a slightly annoying hack to work around the fact that there's no way to
         // provide a method signature conditionally.
-        const Interface = InterfaceGen(@This(), UserContext);
-        pub usingnamespace Interface;
-
-        inline fn cast_interface_parser(parser: *anyopaque) *@This() {
-            return @ptrCast(@alignCast(parser));
-        }
-
-        fn wrap_execute(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
-            const self = cast_interface_parser(parser);
-
-            // this is a slightly annoying hack to work around the problem that void has
-            // 0 alignment, which alignCast chokes on.
-            const context = Interface.cast_context(ctx);
-            return try self.execute(context);
-        }
-
-        fn wrap_parse(parser: *anyopaque, ctx: *anyopaque, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
-            const self = cast_interface_parser(parser);
-            const context = Interface.cast_context(ctx);
-            return try self.subparse(context, name, args, env);
-        }
-
-        fn wrap_finish(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
-            const self = cast_interface_parser(parser);
-            const context = Interface.cast_context(ctx);
-            return try self.finish(context);
-        }
-
-        fn wrap_getChild(parser: *anyopaque, name: []const u8) ?ParserInterface {
-            const self = cast_interface_parser(parser);
-            return self.getChild(name);
-        }
-
-        fn wrap_deinit(parser: *anyopaque) void {
-            const self = cast_interface_parser(parser);
-            self.deinit();
-        }
-
-        fn wrap_deinitTree(parser: *anyopaque) void {
-            const self = cast_interface_parser(parser);
-            self.deinitTree();
-        }
-
-        fn describe() []const u8 {
-            return command.description;
-        }
+        pub usingnamespace InterfaceGen(@This(), UserContext);
+        pub usingnamespace InterfaceWrappers(@This());
 
         pub fn subparse(self: *@This(), context: UserContext, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
             const sliceto = try self.parse(name, args);
-            try self.read_environment(env);
-            try self.convert_eager(context);
+            try self.readEnvironment(env);
+            try self.convertEager(context);
 
             if (self.subcommand) |verb| {
                 const verbname = try std.mem.join(
@@ -188,7 +198,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 const stderr = std.io.getStdErr().writer();
                 try stderr.writeAll("A subcommand is required.\n\n");
 
-                self.print_help(name);
+                self.printHelp(name);
             }
         }
 
@@ -227,11 +237,11 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             try self.finish(context);
         }
 
-        fn print_value(self: @This(), value: anytype, comptime indent: []const u8) void {
+        fn printValue(self: @This(), value: anytype, comptime indent: []const u8) void {
             if (comptime @hasField(@TypeOf(value), "items")) {
                 std.debug.print("{s}[\n", .{indent});
                 for (value.items) |item| {
-                    self.print_value(item, indent ++ "   ");
+                    self.printValue(item, indent ++ "   ");
                 }
                 std.debug.print("{s}]\n", .{indent});
             } else {
@@ -285,11 +295,11 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
                 if (!forced_ordinal and arg.len > 1 and arg[0] == '-') {
                     if (arg.len > 2 and arg[1] == '-') {
-                        try self.parse_long_tag(name, arg, &argit);
+                        try self.parseLongTag(name, arg, &argit);
                         continue :argloop;
                     } else if (arg.len > 1) {
                         for (arg[1..], 1..) |short, idx| {
-                            try self.parse_short_tag(name, short, arg.len - idx - 1, &argit);
+                            try self.parseShortTag(name, short, arg.len - idx - 1, &argit);
                         }
                         continue :argloop;
                     }
@@ -299,7 +309,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                     forced_ordinal = true;
                 }
 
-                if (try self.parse_ordinals(arg, &argit)) |verb| {
+                if (try self.parseOrdinals(arg, &argit)) |verb| {
                     self.subcommand = verb;
                     // TODO: return slice of remaining or offset index
                     return argit.index;
@@ -309,7 +319,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return 0;
         }
 
-        fn parse_long_tag(
+        fn parseLongTag(
             self: *@This(),
             name: []const u8,
             arg: []const u8,
@@ -317,7 +327,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         ) ParseError!void {
             if (comptime command.help_flag.long_tag) |long|
                 if (std.mem.eql(u8, arg, long))
-                    self.print_help(name);
+                    self.printHelp(name);
 
             inline for (comptime parameters) |param| {
                 const PType = @TypeOf(param);
@@ -327,9 +337,9 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
                 if (std.mem.startsWith(u8, arg, tag)) match: {
                     if (arg.len == tag.len) {
-                        try self.apply_param_values(param, argit, false);
+                        try self.applyParamValues(param, argit, false);
                     } else if (arg[tag.len] == '=') {
-                        try self.apply_fused_values(param, arg[tag.len + 1 ..]);
+                        try self.applyFusedValues(param, arg[tag.len + 1 ..]);
                     } else break :match;
 
                     return;
@@ -339,7 +349,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return ParseError.UnknownLongTagParameter;
         }
 
-        fn parse_short_tag(
+        fn parseShortTag(
             self: *@This(),
             name: []const u8,
             arg: u8,
@@ -348,7 +358,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         ) ParseError!void {
             if (comptime command.help_flag.short_tag) |short|
                 if (arg == short[1])
-                    self.print_help(name);
+                    self.printHelp(name);
 
             inline for (comptime parameters) |param| {
                 const PType = @TypeOf(param);
@@ -361,7 +371,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                         if (remaining > 0)
                             return ParseError.FusedShortTagValueMissing;
 
-                    try self.apply_param_values(param, argit, false);
+                    try self.applyParamValues(param, argit, false);
                     return;
                 }
             }
@@ -369,7 +379,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return ParseError.UnknownShortTagParameter;
         }
 
-        fn parse_ordinals(
+        fn parseOrdinals(
             self: *@This(),
             arg: []const u8,
             argit: *ncmeta.SliceIterator([][:0]u8),
@@ -381,9 +391,9 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 if (self.consumed_args == arg_index) {
                     argit.rewind();
                     if (comptime @TypeOf(param).G.multi) {
-                        while (argit.peek()) |_| try self.apply_param_values(param, argit, false);
+                        while (argit.peek()) |_| try self.applyParamValues(param, argit, false);
                     } else {
-                        try self.apply_param_values(param, argit, false);
+                        try self.applyParamValues(param, argit, false);
                     }
                     self.consumed_args += 1;
                     return null;
@@ -395,7 +405,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             return self.subcommands.get(arg) orelse ParseError.ExtraValue;
         }
 
-        fn push_intermediate_value(
+        fn pushIntermediateValue(
             self: *@This(),
             comptime param: anytype,
             // @TypeOf(param).G.IntermediateValue() should work but appears to trigger a
@@ -416,18 +426,18 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        fn apply_param_values(
+        fn applyParamValues(
             self: *@This(),
             comptime param: anytype,
             argit: anytype,
             bounded: bool,
         ) ParseError!void {
             switch (comptime @TypeOf(param).G.value_count) {
-                .flag => try self.push_intermediate_value(param, comptime param.flag_bias.string()),
+                .flag => try self.pushIntermediateValue(param, comptime param.flag_bias.string()),
                 .count => @field(self.intermediate, param.name) += 1,
                 .fixed => |count| switch (count) {
                     0 => return ParseError.ExtraValue,
-                    1 => try self.push_intermediate_value(param, argit.next() orelse return ParseError.MissingValue),
+                    1 => try self.pushIntermediateValue(param, argit.next() orelse return ParseError.MissingValue),
                     else => |total| {
                         var list = std.ArrayList([]const u8).initCapacity(self.allocator, total) catch
                             return ParseError.UnexpectedFailure;
@@ -439,39 +449,39 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                         }
                         if (bounded and argit.next() != null) return ParseError.ExtraValue;
 
-                        try self.push_intermediate_value(param, list);
+                        try self.pushIntermediateValue(param, list);
                     },
                 },
             }
         }
 
-        fn apply_fused_values(
+        fn applyFusedValues(
             self: *@This(),
             comptime param: anytype,
             value: []const u8,
         ) ParseError!void {
             var iter = std.mem.split(u8, value, ",");
-            return try self.apply_param_values(param, &iter, true);
+            return try self.applyParamValues(param, &iter, true);
         }
 
-        fn read_environment(self: *@This(), env: std.process.EnvMap) !void {
+        fn readEnvironment(self: *@This(), env: std.process.EnvMap) !void {
             inline for (comptime parameters) |param| {
                 if (comptime param.env_var) |env_var| blk: {
                     if (@field(self.intermediate, param.name) != null) break :blk;
                     const val = env.get(env_var) orelse break :blk;
                     if (comptime @TypeOf(param).G.value_count == .flag) {
-                        try self.push_intermediate_value(param, val);
+                        try self.pushIntermediateValue(param, val);
                     } else {
-                        try self.apply_fused_values(param, val);
+                        try self.applyFusedValues(param, val);
                     }
                 }
             }
         }
 
-        fn convert_eager(self: *@This(), context: UserContext) NoclipError!void {
+        fn convertEager(self: *@This(), context: UserContext) NoclipError!void {
             inline for (comptime parameters) |param| {
                 if (comptime param.eager) {
-                    try self.convert_param(param, context);
+                    try self.convertParam(param, context);
                 }
             }
         }
@@ -479,12 +489,12 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         fn convert(self: *@This(), context: UserContext) NoclipError!void {
             inline for (comptime parameters) |param| {
                 if (comptime !param.eager) {
-                    try self.convert_param(param, context);
+                    try self.convertParam(param, context);
                 }
             }
         }
 
-        fn convert_param(self: *@This(), comptime param: anytype, context: UserContext) NoclipError!void {
+        fn convertParam(self: *@This(), comptime param: anytype, context: UserContext) NoclipError!void {
             if (@field(self.intermediate, param.name)) |intermediate| {
                 var buffer = std.ArrayList(u8).init(self.allocator);
                 const writer = buffer.writer();
@@ -519,11 +529,11 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             }
         }
 
-        fn print_help(self: *@This(), name: []const u8) noreturn {
+        fn printHelp(self: *@This(), name: []const u8) noreturn {
             defer std.process.exit(0);
 
             const stderr = std.io.getStdErr().writer();
-            if (self.help_builder.build_message(name, self.subcommands)) |message|
+            if (self.help_builder.buildMessage(name, self.subcommands)) |message|
                 stderr.writeAll(message) catch return
             else |_|
                 stderr.writeAll("There was a problem generating the help.") catch return;

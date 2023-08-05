@@ -20,7 +20,7 @@ pub fn StructuredPrinter(comptime Writer: type) type {
         wrap_width: usize = 100,
         writer: Writer,
 
-        pub fn print_pair(self: *@This(), pair: AlignablePair, leading_indent: u8, tabstop: usize) !void {
+        pub fn printPair(self: *@This(), pair: AlignablePair, leading_indent: u8, tabstop: usize) !void {
             try self.writer.writeByteNTimes(' ', leading_indent);
             const left = std.mem.trim(u8, pair.left, " \n");
             try self.writer.writeAll(left);
@@ -30,26 +30,26 @@ pub fn StructuredPrinter(comptime Writer: type) type {
             if (offset > tabstop) return NoclipError.UnexpectedFailure;
 
             try self.writer.writeByteNTimes(' ', tabstop - offset);
-            try self.print_rewrap(std.mem.trim(u8, pair.right, " \n"), tabstop);
+            try self.printRewrap(std.mem.trim(u8, pair.right, " \n"), tabstop);
             try self.writer.writeByte('\n');
         }
 
-        pub fn print_pair_brief(self: *@This(), pair: AlignablePair, leading_indent: u8, tabstop: usize) !void {
+        pub fn printPairBrief(self: *@This(), pair: AlignablePair, leading_indent: u8, tabstop: usize) !void {
             const brief = ncmeta.partition(u8, pair.right, &[_][]const u8{"\n\n"})[0];
             const simulacrum: AlignablePair = .{
                 .left = pair.left,
                 .right = brief,
             };
 
-            try self.print_pair(simulacrum, leading_indent, tabstop);
+            try self.printPair(simulacrum, leading_indent, tabstop);
         }
 
-        pub fn print_wrapped(self: *@This(), text: []const u8, leading_indent: usize) !void {
+        pub fn printWrapped(self: *@This(), text: []const u8, leading_indent: usize) !void {
             try self.writer.writeByteNTimes(' ', leading_indent);
-            try self.print_rewrap(std.mem.trim(u8, text, "\n"), leading_indent);
+            try self.printRewrap(std.mem.trim(u8, text, "\n"), leading_indent);
         }
 
-        fn print_rewrap(self: *@This(), text: []const u8, indent: usize) !void {
+        fn printRewrap(self: *@This(), text: []const u8, indent: usize) !void {
             // TODO: lol return a real error
             if (indent >= self.wrap_width) return NoclipError.UnexpectedFailure;
 
@@ -62,8 +62,8 @@ pub fn StructuredPrinter(comptime Writer: type) type {
                 if (line.len == 0) {
                     // we have a trailing line that needs to be cleaned up
                     if (location > indent)
-                        _ = try self.clear_line(indent);
-                    location = try self.clear_line(indent);
+                        _ = try self.clearLine(indent);
+                    location = try self.clearLine(indent);
                     continue;
                 }
 
@@ -91,7 +91,7 @@ pub fn StructuredPrinter(comptime Writer: type) type {
                                 break;
                             }
                             if (location != indent)
-                                location = try self.clear_line(indent);
+                                location = try self.clearLine(indent);
 
                             need_forced_break = true;
                             continue :choppa;
@@ -100,13 +100,13 @@ pub fn StructuredPrinter(comptime Writer: type) type {
                     if (location > indent)
                         try self.writer.writeByte(' ');
                     try self.writer.writeAll(choppee[0..split]);
-                    location = try self.clear_line(indent);
+                    location = try self.clearLine(indent);
                     choppee = choppee[split + 1 ..];
                 }
             }
         }
 
-        fn clear_line(self: *@This(), indent: usize) !usize {
+        fn clearLine(self: *@This(), indent: usize) !usize {
             try self.writer.writeByte('\n');
             try self.writer.writeByteNTimes(' ', indent);
             return indent;
@@ -115,7 +115,7 @@ pub fn StructuredPrinter(comptime Writer: type) type {
 }
 
 pub fn HelpBuilder(comptime command: anytype) type {
-    const help_info = opt_info(command.generate());
+    const help_info = optInfo(command.generate());
 
     return struct {
         writebuffer: std.ArrayList(u8),
@@ -126,7 +126,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             };
         }
 
-        pub fn build_message(
+        pub fn buildMessage(
             self: *@This(),
             name: []const u8,
             subcommands: parser.CommandMap,
@@ -136,26 +136,26 @@ pub fn HelpBuilder(comptime command: anytype) type {
                 "Usage: {s}{s}{s}{s}\n\n",
                 .{
                     name,
-                    self.option_brief(),
-                    try self.args_brief(),
-                    self.subcommands_brief(subcommands),
+                    self.optionBrief(),
+                    try self.argsBrief(),
+                    self.subcommandsBrief(subcommands),
                 },
             );
 
             var printer = StructuredPrinter(@TypeOf(writer)){ .writer = writer };
-            try printer.print_wrapped(command.description, 2);
+            try printer.printWrapped(command.description, 2);
             try writer.writeAll("\n\n");
 
-            const arguments = try self.describe_arguments();
-            const options = try self.describe_options();
-            const env_vars = try self.describe_env();
-            const subcs = try self.describe_subcommands(subcommands);
+            const arguments = try self.describeArguments();
+            const options = try self.describeOptions();
+            const env_vars = try self.describeEnv();
+            const subcs = try self.describeSubcommands(subcommands);
             const max_just = @max(arguments.just, @max(options.just, @max(env_vars.just, subcs.just)));
 
             if (arguments.pairs.len > 0) {
                 try writer.writeAll("Arguments:\n");
                 for (arguments.pairs) |pair|
-                    try printer.print_pair(pair, 2, max_just + 4);
+                    try printer.printPair(pair, 2, max_just + 4);
 
                 try writer.writeAll("\n");
             }
@@ -163,7 +163,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             if (options.pairs.len > 0) {
                 try writer.writeAll("Options:\n");
                 for (options.pairs) |pair|
-                    try printer.print_pair(pair, 2, max_just + 4);
+                    try printer.printPair(pair, 2, max_just + 4);
 
                 try writer.writeAll("\n");
             }
@@ -171,7 +171,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             if (env_vars.pairs.len > 0) {
                 try writer.writeAll("Environment variables:\n");
                 for (env_vars.pairs) |pair|
-                    try printer.print_pair(pair, 2, max_just + 4);
+                    try printer.printPair(pair, 2, max_just + 4);
 
                 try writer.writeAll("\n");
             }
@@ -179,7 +179,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             if (subcs.pairs.len > 0) {
                 try writer.writeAll("Subcommands:\n");
                 for (subcs.pairs) |pair|
-                    try printer.print_pair_brief(pair, 2, max_just + 4);
+                    try printer.printPairBrief(pair, 2, max_just + 4);
 
                 try writer.writeAll("\n");
             }
@@ -187,14 +187,14 @@ pub fn HelpBuilder(comptime command: anytype) type {
             return self.writebuffer.toOwnedSlice();
         }
 
-        fn option_brief(_: @This()) []const u8 {
+        fn optionBrief(_: @This()) []const u8 {
             return if (comptime help_info.options.len > 0)
                 " [options...]"
             else
                 "";
         }
 
-        fn args_brief(self: @This()) ![]const u8 {
+        fn argsBrief(self: @This()) ![]const u8 {
             var buf = std.ArrayList(u8).init(self.writebuffer.allocator);
             defer buf.deinit();
 
@@ -214,14 +214,14 @@ pub fn HelpBuilder(comptime command: anytype) type {
             return buf.toOwnedSlice();
         }
 
-        fn subcommands_brief(_: @This(), subcommands: parser.CommandMap) []const u8 {
+        fn subcommandsBrief(_: @This(), subcommands: parser.CommandMap) []const u8 {
             return if (subcommands.count() > 0)
                 " <subcommand ...>"
             else
                 "";
         }
 
-        fn describe_arguments(self: @This()) !OptionDescription {
+        fn describeArguments(self: @This()) !OptionDescription {
             var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
             defer pairs.deinit();
 
@@ -243,13 +243,13 @@ pub fn HelpBuilder(comptime command: anytype) type {
             };
         }
 
-        fn describe_options(self: @This()) !OptionDescription {
+        fn describeOptions(self: @This()) !OptionDescription {
             var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
             defer pairs.deinit();
 
             var just: usize = 0;
             inline for (help_info.options) |opt| {
-                const pair = try self.describe_option(opt);
+                const pair = try self.describeOption(opt);
                 if (pair.left.len > just) just = pair.left.len;
                 try pairs.append(pair);
             }
@@ -260,7 +260,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             };
         }
 
-        fn describe_option(self: @This(), comptime opt: OptHelp) !AlignablePair {
+        fn describeOption(self: @This(), comptime opt: OptHelp) !AlignablePair {
             var buffer = std.ArrayList(u8).init(self.writebuffer.allocator);
             defer buffer.deinit();
             const writer = buffer.writer();
@@ -321,7 +321,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             return .{ .left = left, .right = right };
         }
 
-        fn describe_env(self: @This()) !OptionDescription {
+        fn describeEnv(self: @This()) !OptionDescription {
             var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
             defer pairs.deinit();
 
@@ -343,7 +343,7 @@ pub fn HelpBuilder(comptime command: anytype) type {
             };
         }
 
-        fn describe_subcommands(self: @This(), subcommands: parser.CommandMap) !OptionDescription {
+        fn describeSubcommands(self: @This(), subcommands: parser.CommandMap) !OptionDescription {
             var pairs = std.ArrayList(AlignablePair).init(self.writebuffer.allocator);
             defer pairs.deinit();
 
@@ -402,7 +402,7 @@ const ArgHelp = struct {
     required: bool = true,
 };
 
-pub fn opt_info(comptime command: anytype) CommandHelp {
+pub fn optInfo(comptime command: anytype) CommandHelp {
     // TODO: this could be runtime and it would be slightly simpler.
     comptime {
         var options: []const OptHelp = &[_]OptHelp{};
@@ -428,7 +428,7 @@ pub fn opt_info(comptime command: anytype) CommandHelp {
 
             if (!std.mem.eql(u8, last_name, param.name)) {
                 if (last_name.len > 0) {
-                    if (env_only(last_option)) {
+                    if (envOnly(last_option)) {
                         env_vars = env_vars ++ &[_]EnvHelp{.{
                             .env_var = last_option.env_var,
                             .description = last_option.description,
@@ -487,7 +487,7 @@ pub fn opt_info(comptime command: anytype) CommandHelp {
         }
 
         if (last_name.len > 0) {
-            if (env_only(last_option)) {
+            if (envOnly(last_option)) {
                 env_vars = env_vars ++ &[_]EnvHelp{.{
                     .env_var = last_option.env_var.?,
                     .description = last_option.description,
@@ -506,7 +506,7 @@ pub fn opt_info(comptime command: anytype) CommandHelp {
     }
 }
 
-inline fn env_only(option: OptHelp) bool {
+inline fn envOnly(option: OptHelp) bool {
     return option.short_truthy == null and
         option.long_truthy == null and
         option.short_falsy == null and

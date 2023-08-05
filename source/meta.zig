@@ -48,7 +48,7 @@ pub fn UpdateDefaults(comptime input: type, comptime defaults: anytype) type {
     }
 }
 
-pub fn enum_length(comptime T: type) comptime_int {
+pub fn enumLength(comptime T: type) comptime_int {
     return @typeInfo(T).Enum.fields.len;
 }
 
@@ -174,7 +174,7 @@ pub fn SliceIterator(comptime T: type) type {
     };
 }
 
-pub fn copy_struct(comptime T: type, source: T, field_overrides: anytype) T {
+pub fn copyStruct(comptime T: type, source: T, field_overrides: anytype) T {
     var result: T = undefined;
 
     comptime inline for (@typeInfo(@TypeOf(field_overrides)).Struct.fields) |field| {

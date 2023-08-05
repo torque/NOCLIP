@@ -17,30 +17,30 @@ pub fn ConverterSignature(comptime gen: ParameterGenerics) type {
     ) ConversionError!gen.ConvertedType();
 }
 
-pub fn default_converter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
+pub fn DefaultConverter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
     return if (comptime gen.multi)
-        multi_converter(gen)
+        MultiConverter(gen)
     else switch (@typeInfo(gen.OutputType)) {
-        .Bool => flag_converter(gen),
-        .Int => int_converter(gen),
+        .Bool => FlagConverter(gen),
+        .Int => IntConverter(gen),
         .Pointer => |info| if (info.size == .Slice and info.child == u8)
-            string_converter(gen)
+            StringConverter(gen)
         else
             null,
-        .Enum => |info| if (info.is_exhaustive) choice_converter(gen) else null,
+        .Enum => |info| if (info.is_exhaustive) ChoiceConverter(gen) else null,
         // TODO: how to handle structs with field defaults? maybe this should only work
         // for tuples, which I don't think can have defaults.
         .Struct => |info| if (gen.value_count == .fixed and gen.value_count.fixed == info.fields.len)
-            struct_converter(gen)
+            StructConverter(gen)
         else
             null,
         else => null,
     };
 }
 
-fn multi_converter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
-    const converter = default_converter(
-        ncmeta.copy_struct(ParameterGenerics, gen, .{ .multi = false }),
+fn MultiConverter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
+    const converter = DefaultConverter(
+        ncmeta.copyStruct(ParameterGenerics, gen, .{ .multi = false }),
     ) orelse
         @compileError("no default converter");
     const Intermediate = gen.IntermediateType();
@@ -59,7 +59,7 @@ fn multi_converter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
     }.handler;
 }
 
-fn flag_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
+fn FlagConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     return struct {
         pub fn handler(_: gen.UserContext, input: []const u8, _: ErrorWriter) ConversionError!bool {
             // treat an empty string as falsy
@@ -79,7 +79,7 @@ fn flag_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     }.handler;
 }
 
-fn string_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
+fn StringConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     return struct {
         pub fn handler(_: gen.UserContext, input: []const u8, _: ErrorWriter) ConversionError![]const u8 {
             return input;
@@ -87,7 +87,7 @@ fn string_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     }.handler;
 }
 
-fn int_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
+fn IntConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     const IntType = gen.OutputType;
 
     return struct {
@@ -100,7 +100,7 @@ fn int_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     }.handler;
 }
 
-fn struct_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
+fn StructConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     const StructType = gen.OutputType;
     const type_info = @typeInfo(StructType).Struct;
     const Intermediate = gen.IntermediateType();
@@ -117,15 +117,15 @@ fn struct_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
 
             var result: StructType = undefined;
             inline for (comptime type_info.fields, 0..) |field, idx| {
-                const converter = comptime default_converter(
-                    ncmeta.copy_struct(ParameterGenerics, gen, .{
+                const Converter = comptime DefaultConverter(
+                    ncmeta.copyStruct(ParameterGenerics, gen, .{
                         .OutputType = field.type,
                         .value_count = .{ .fixed = 1 },
                     }),
                 ) orelse
                     @compileError("cannot get converter for field" ++ field.name);
 
-                @field(result, field.name) = try converter(context, input.items[idx], failure);
+                @field(result, field.name) = try Converter(context, input.items[idx], failure);
             }
 
             return result;
@@ -133,7 +133,7 @@ fn struct_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     }.handler;
 }
 
-fn choice_converter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
+fn ChoiceConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     const EnumType = gen.OutputType;
 
     return struct {

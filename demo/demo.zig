@@ -13,7 +13,7 @@ const cli = cmd: {
         \\This command demonstrates the functionality of the noclip library. cool!
         ,
     };
-    cmd.add_option(.{ .OutputType = struct { u8, u8 } }, .{
+    cmd.addOption(.{ .OutputType = struct { u8, u8 } }, .{
         .name = "test",
         .short_tag = "-t",
         .long_tag = "--test",
@@ -21,7 +21,7 @@ const cli = cmd: {
         .description = "multi-value test option",
         .nice_type_name = "int> <int",
     });
-    cmd.add_option(.{ .OutputType = Choice }, .{
+    cmd.addOption(.{ .OutputType = Choice }, .{
         .name = "choice",
         .short_tag = "-c",
         .long_tag = "--choice",
@@ -30,7 +30,7 @@ const cli = cmd: {
         .description = "enum choice option",
         .nice_type_name = "choice",
     });
-    cmd.add_option(.{ .OutputType = u32 }, .{
+    cmd.addOption(.{ .OutputType = u32 }, .{
         .name = "default",
         .short_tag = "-d",
         .long_tag = "--default",
@@ -39,25 +39,25 @@ const cli = cmd: {
         .description = "default value integer option",
         .nice_type_name = "uint",
     });
-    cmd.add_option(.{ .OutputType = u8, .multi = true }, .{
+    cmd.addOption(.{ .OutputType = u8, .multi = true }, .{
         .name = "multi",
         .short_tag = "-m",
         .long_tag = "--multi",
         .description = "multiple specification test option",
     });
-    cmd.add_flag(.{}, .{
+    cmd.addFlag(.{}, .{
         .name = "flag",
         .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
         .falsy = .{ .short_tag = "-F", .long_tag = "--no-flag" },
         .env_var = "NOCLIP_FLAG",
         .description = "boolean flag",
     });
-    cmd.add_flag(.{ .multi = true }, .{
+    cmd.addFlag(.{ .multi = true }, .{
         .name = "multiflag",
         .truthy = .{ .short_tag = "-M" },
         .description = "multiple specification test flag ",
     });
-    cmd.add_option(.{ .OutputType = u8 }, .{
+    cmd.addOption(.{ .OutputType = u8 }, .{
         .name = "env",
         .env_var = "NOCLIP_ENVIRON",
         .description = "environment variable only option",
@@ -74,26 +74,26 @@ const subcommand = cmd: {
         \\This command demonstrates how subcommands work.
         ,
     };
-    cmd.simple_flag(.{
+    cmd.simpleFlag(.{
         .name = "flag",
         .truthy = .{ .short_tag = "-f", .long_tag = "--flag" },
         .falsy = .{ .long_tag = "--no-flag" },
         .env_var = "NOCLIP_SUBFLAG",
     });
-    cmd.add_argument(.{ .OutputType = []const u8 }, .{ .name = "argument" });
-    cmd.add_argument(.{ .OutputType = []const u8 }, .{
+    cmd.addArgument(.{ .OutputType = []const u8 }, .{ .name = "argument" });
+    cmd.addArgument(.{ .OutputType = []const u8 }, .{
         .name = "arg",
         .description = "This is an argument that doesn't really do anything, but it's very important.",
     });
     break :cmd cmd;
 };
 
-fn sub_handler(context: []const u8, result: subcommand.Output()) !void {
+fn subHandler(context: []const u8, result: subcommand.Output()) !void {
     std.debug.print("subcommand: {s}\n", .{result.argument});
     std.debug.print("context: {s}\n", .{context});
 }
 
-fn cli_handler(context: *u32, result: cli.Output()) !void {
+fn cliHandler(context: *u32, result: cli.Output()) !void {
     std.debug.print("context: {d}\n", .{context.*});
     std.debug.print("callback is working {any}\n", .{result.choice});
     std.debug.print("callback is working {d}\n", .{result.default});
@@ -105,14 +105,14 @@ pub fn main() !u8 {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var parser = try cli.create_parser(cli_handler, allocator);
+    var parser = try cli.createParser(cliHandler, allocator);
     defer parser.deinitTree();
 
     var context: u32 = 2;
     const sc: []const u8 = "whassup";
 
-    var subcon = try subcommand.create_parser(sub_handler, allocator);
-    try parser.add_subcommand("verb", subcon.interface(&sc));
+    var subcon = try subcommand.createParser(subHandler, allocator);
+    try parser.addSubcommand("verb", subcon.interface(&sc));
 
     const iface = parser.interface(&context);
     iface.execute() catch return 1;

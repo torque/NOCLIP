@@ -34,6 +34,7 @@ pub const ParameterGenerics = struct {
     /// useful for implementing complex conversion that produces output through its
     /// side effects or by modifying the user context.
     OutputType: type = void,
+
     param_type: ParameterType,
     value_count: ValueCount,
     /// allow this named parameter to be passed multiple times.
@@ -44,7 +45,7 @@ pub const ParameterGenerics = struct {
     // many-to-many and the many-to-one cases.
     multi: bool,
 
-    pub fn fixed_value_count(comptime OutputType: type, comptime value_count: ValueCount) ValueCount {
+    pub fn fixedValueCount(comptime OutputType: type, comptime value_count: ValueCount) ValueCount {
         return comptime if (value_count == .fixed)
             switch (@typeInfo(OutputType)) {
                 .Struct => |info| .{ .fixed = info.fields.len },
@@ -58,15 +59,15 @@ pub const ParameterGenerics = struct {
             value_count;
     }
 
-    pub fn has_context(comptime self: @This()) bool {
+    pub fn hasContext(comptime self: @This()) bool {
         return comptime self.UserContext != void;
     }
 
-    pub fn has_output(comptime self: @This()) bool {
+    pub fn hasOutput(comptime self: @This()) bool {
         return self.OutputType != void;
     }
 
-    pub fn is_flag(comptime self: @This()) bool {
+    pub fn isFlag(comptime self: @This()) bool {
         return comptime switch (self.value_count) {
             .flag, .count => true,
             .fixed => false,
@@ -185,10 +186,10 @@ fn OptionType(comptime generics: ParameterGenerics) type {
     return struct {
         pub const G: ParameterGenerics = generics;
         pub const param_type: ParameterType = generics.param_type;
-        pub const is_flag: bool = generics.is_flag();
+        pub const is_flag: bool = generics.isFlag();
         pub const value_count: ValueCount = generics.value_count;
         pub const multi: bool = generics.multi;
-        pub const has_output: bool = generics.has_output();
+        pub const has_output: bool = generics.hasOutput();
 
         name: []const u8,
         short_tag: ?[]const u8,
@@ -228,17 +229,17 @@ fn OptionType(comptime generics: ParameterGenerics) type {
     };
 }
 
-fn check_short(comptime short_tag: ?[]const u8) void {
+fn checkShort(comptime short_tag: ?[]const u8) void {
     const short = comptime short_tag orelse return;
     if (short.len != 2 or short[0] != '-') @compileError("bad short tag: " ++ short);
 }
 
-fn check_long(comptime long_tag: ?[]const u8) void {
+fn checkLong(comptime long_tag: ?[]const u8) void {
     const long = comptime long_tag orelse return;
     if (long.len < 3 or long[0] != '-' or long[1] != '-') @compileError("bad long tag: " ++ long);
 }
 
-pub fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionConfig(generics)) OptionType(generics) {
+pub fn makeOption(comptime generics: ParameterGenerics, comptime opts: OptionConfig(generics)) OptionType(generics) {
     if (opts.short_tag == null and opts.long_tag == null and opts.env_var == null) {
         @compileError(
             "option " ++
@@ -247,8 +248,8 @@ pub fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionCo
         );
     }
 
-    check_short(opts.short_tag);
-    check_long(opts.long_tag);
+    checkShort(opts.short_tag);
+    checkLong(opts.long_tag);
 
     // perform the logic to create the default converter here? Could be done
     // when creating the OptionConfig instead. Need to do it here because there
@@ -257,7 +258,7 @@ pub fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionCo
     // whereas the OptionType is an instance of an object that has been
     // validated.
     const converter = opts.converter orelse
-        (converters.default_converter(generics) orelse @compileError(
+        (converters.DefaultConverter(generics) orelse @compileError(
         "no converter provided for " ++
             opts.name ++
             "and no default exists",
@@ -284,7 +285,7 @@ pub fn make_option(comptime generics: ParameterGenerics, comptime opts: OptionCo
     };
 }
 
-pub fn make_argument(
+pub fn makeArgument(
     comptime generics: ParameterGenerics,
     comptime opts: OptionConfig(generics),
 ) OptionType(generics) {
@@ -298,7 +299,7 @@ pub fn make_argument(
         }
 
         const converter = opts.converter orelse
-            (converters.default_converter(generics) orelse @compileError(
+            (converters.DefaultConverter(generics) orelse @compileError(
             "no converter provided for " ++
                 opts.name ++
                 "and no default exists",
