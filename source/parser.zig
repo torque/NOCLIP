@@ -12,7 +12,8 @@ pub const ParserInterface = struct {
         execute: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!void,
         parse: *const fn (parser: *anyopaque, context: *anyopaque, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!void,
         finish: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!void,
-        getChild: *const fn (parser: *anyopaque, name: []const u8) ?ParserInterface,
+        addSubcommand: *const fn (parser: *anyopaque, name: []const u8, subcommand: ParserInterface) std.mem.Allocator.Error!void,
+        getSubcommand: *const fn (parser: *anyopaque, name: []const u8) ?ParserInterface,
         describe: *const fn () []const u8,
         deinit: *const fn (parser: *anyopaque) void,
         deinitTree: *const fn (parser: *anyopaque) void,
@@ -30,7 +31,8 @@ pub const ParserInterface = struct {
                 .execute = ParserType._wrapExecute,
                 .parse = ParserType._wrapParse,
                 .finish = ParserType._wrapFinish,
-                .getChild = ParserType._wrapGetChild,
+                .addSubcommand = ParserType._wrapAddSubcommand,
+                .getSubcommand = ParserType._wrapGetSubcommand,
                 .describe = ParserType._wrapDescribe,
                 .deinit = ParserType._wrapDeinit,
                 .deinitTree = ParserType._wrapDeinitTree,
@@ -50,8 +52,12 @@ pub const ParserInterface = struct {
         return try self.methods.finish(self.parser, self.context);
     }
 
-    pub fn getChild(self: @This(), name: []const u8) ?ParserInterface {
-        return self.methods.getChild(self.parser, name);
+    pub fn addSubcommand(self: @This(), name: []const u8, subcommand: ParserInterface) std.mem.Allocator.Error!void {
+        return try self.methods.addSubcommand(self.parser, name, subcommand);
+    }
+
+    pub fn getSubcommand(self: @This(), name: []const u8) ?ParserInterface {
+        return self.methods.getSubcommand(self.parser, name);
     }
 
     pub fn describe(self: @This()) []const u8 {
@@ -66,88 +72,6 @@ pub const ParserInterface = struct {
         self.methods.deinitTree(self.parser);
     }
 };
-
-fn InterfaceWrappers(comptime ParserType: type) type {
-    return struct {
-        inline fn castInterfaceParser(parser: *anyopaque) *ParserType {
-            return @ptrCast(@alignCast(parser));
-        }
-
-        fn _wrapExecute(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
-            const self = castInterfaceParser(parser);
-
-            const context = self.castContext(ctx);
-            return try self.execute(context);
-        }
-
-        fn _wrapParse(
-            parser: *anyopaque,
-            ctx: *anyopaque,
-            name: []const u8,
-            args: [][:0]u8,
-            env: std.process.EnvMap,
-        ) anyerror!void {
-            const self = castInterfaceParser(parser);
-            const context = self.castContext(ctx);
-            return try self.subparse(context, name, args, env);
-        }
-
-        fn _wrapFinish(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
-            const self = castInterfaceParser(parser);
-            const context = self.castContext(ctx);
-            return try self.finish(context);
-        }
-
-        fn _wrapGetChild(parser: *anyopaque, name: []const u8) ?ParserInterface {
-            const self = castInterfaceParser(parser);
-            return self.getChild(name);
-        }
-
-        fn _wrapDeinit(parser: *anyopaque) void {
-            const self = castInterfaceParser(parser);
-            self.deinit();
-        }
-
-        fn _wrapDeinitTree(parser: *anyopaque) void {
-            const self = castInterfaceParser(parser);
-            self.deinitTree();
-        }
-
-        fn _wrapDescribe() []const u8 {
-            return ParserType.command_description;
-        }
-    };
-}
-
-fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
-    const CtxInfo = @typeInfo(UserContext);
-
-    return if (CtxInfo == .Void) struct {
-        pub fn interface(self: *ParserType) ParserInterface {
-            return ParserInterface.create(ParserType, self, @constCast(&void{}));
-        }
-
-        fn castContext(_: ParserType, _: *anyopaque) void {
-            return void{};
-        }
-    } else if (CtxInfo == .Pointer and CtxInfo.Pointer.size != .Slice) struct {
-        pub fn interface(self: *ParserType, context: UserContext) ParserInterface {
-            return ParserInterface.create(ParserType, self, @constCast(context));
-        }
-
-        fn castContext(_: ParserType, ctx: *anyopaque) UserContext {
-            return @ptrCast(@alignCast(ctx));
-        }
-    } else struct {
-        pub fn interface(self: *ParserType, context: *const UserContext) ParserInterface {
-            return ParserInterface.create(ParserType, self, @ptrCast(@constCast(context)));
-        }
-
-        fn castContext(_: ParserType, ctx: *anyopaque) UserContext {
-            return @as(*const UserContext, @ptrCast(@alignCast(ctx))).*;
-        }
-    };
-}
 
 pub const CommandMap = std.hash_map.StringHashMap(ParserInterface);
 
@@ -173,27 +97,33 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         subcommand: ?ParserInterface = null,
         help_builder: help.HelpBuilder(command),
 
-        pub fn addSubcommand(self: *@This(), verb: []const u8, parser: ParserInterface) !void {
-            try self.subcommands.put(verb, parser);
-        }
-
-        // This is a slightly annoying hack to work around the fact that there's no way to
-        // provide a method signature conditionally.
+        // This is a slightly annoying hack to work around the fact that there's no way
+        // to provide a method signature conditionally.
         pub usingnamespace InterfaceGen(@This(), UserContext);
+        // This is attached to the struct this way because these are all "private"
+        // methods that exist exclusively to cast the type-erased interface object back
+        // into something usable. Their implementations aren't meaningful and just
+        // cognitively clutter this struct.
         pub usingnamespace InterfaceWrappers(@This());
 
-        pub fn subparse(self: *@This(), context: UserContext, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!void {
+        pub fn subparse(
+            self: *@This(),
+            context: UserContext,
+            name: []const u8,
+            args: [][:0]u8,
+            env: std.process.EnvMap,
+        ) anyerror!void {
             const sliceto = try self.parse(name, args);
             try self.readEnvironment(env);
             try self.convertEager(context);
 
-            if (self.subcommand) |verb| {
-                const verbname = try std.mem.join(
+            if (self.subcommand) |subcommand| {
+                const grafted_name = try std.mem.join(
                     self.allocator,
                     " ",
                     &[_][]const u8{ name, args[sliceto - 1] },
                 );
-                try verb.parse(verbname, args[sliceto..], env);
+                try subcommand.parse(grafted_name, args[sliceto..], env);
             } else if (self.subcommands.count() > 0 and command.subcommand_required) {
                 const stderr = std.io.getStdErr().writer();
                 try stderr.writeAll("A subcommand is required.\n\n");
@@ -205,7 +135,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         pub fn finish(self: *@This(), context: UserContext) anyerror!void {
             try self.convert(context);
             try callback(context, self.output);
-            if (self.subcommand) |verb| try verb.finish();
+            if (self.subcommand) |subcommand| try subcommand.finish();
         }
 
         pub fn deinit(self: @This()) void {
@@ -221,7 +151,11 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             self.deinit();
         }
 
-        pub fn getChild(self: @This(), name: []const u8) ?ParserInterface {
+        pub fn addSubcommand(self: *@This(), name: []const u8, parser: ParserInterface) !void {
+            try self.subcommands.put(name, parser);
+        }
+
+        pub fn getSubcommand(self: @This(), name: []const u8) ?ParserInterface {
             return self.subcommands.get(name);
         }
 
@@ -309,8 +243,8 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                     forced_ordinal = true;
                 }
 
-                if (try self.parseOrdinals(arg, &argit)) |verb| {
-                    self.subcommand = verb;
+                if (try self.parseOrdinals(arg, &argit)) |subcommand| {
+                    self.subcommand = subcommand;
                     // TODO: return slice of remaining or offset index
                     return argit.index;
                 }
@@ -537,6 +471,93 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 stderr.writeAll(message) catch return
             else |_|
                 stderr.writeAll("There was a problem generating the help.") catch return;
+        }
+    };
+}
+
+fn InterfaceWrappers(comptime ParserType: type) type {
+    return struct {
+        inline fn castInterfaceParser(parser: *anyopaque) *ParserType {
+            return @ptrCast(@alignCast(parser));
+        }
+
+        fn _wrapExecute(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
+            const self = castInterfaceParser(parser);
+
+            const context = self.castContext(ctx);
+            return try self.execute(context);
+        }
+
+        fn _wrapParse(
+            parser: *anyopaque,
+            ctx: *anyopaque,
+            name: []const u8,
+            args: [][:0]u8,
+            env: std.process.EnvMap,
+        ) anyerror!void {
+            const self = castInterfaceParser(parser);
+            const context = self.castContext(ctx);
+            return try self.subparse(context, name, args, env);
+        }
+
+        fn _wrapFinish(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
+            const self = castInterfaceParser(parser);
+            const context = self.castContext(ctx);
+            return try self.finish(context);
+        }
+
+        fn _wrapAddSubcommand(parser: *anyopaque, name: []const u8, subcommand: ParserInterface) !void {
+            const self = castInterfaceParser(parser);
+            return self.addSubcommand(name, subcommand);
+        }
+
+        fn _wrapGetSubcommand(parser: *anyopaque, name: []const u8) ?ParserInterface {
+            const self = castInterfaceParser(parser);
+            return self.getSubcommand(name);
+        }
+
+        fn _wrapDeinit(parser: *anyopaque) void {
+            const self = castInterfaceParser(parser);
+            self.deinit();
+        }
+
+        fn _wrapDeinitTree(parser: *anyopaque) void {
+            const self = castInterfaceParser(parser);
+            self.deinitTree();
+        }
+
+        fn _wrapDescribe() []const u8 {
+            return ParserType.command_description;
+        }
+    };
+}
+
+fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
+    const CtxInfo = @typeInfo(UserContext);
+
+    return if (CtxInfo == .Void) struct {
+        pub fn interface(self: *ParserType) ParserInterface {
+            return ParserInterface.create(ParserType, self, @constCast(&void{}));
+        }
+
+        fn castContext(_: ParserType, _: *anyopaque) void {
+            return void{};
+        }
+    } else if (CtxInfo == .Pointer and CtxInfo.Pointer.size != .Slice) struct {
+        pub fn interface(self: *ParserType, context: UserContext) ParserInterface {
+            return ParserInterface.create(ParserType, self, @constCast(context));
+        }
+
+        fn castContext(_: ParserType, ctx: *anyopaque) UserContext {
+            return @ptrCast(@alignCast(ctx));
+        }
+    } else struct {
+        pub fn interface(self: *ParserType, context: *const UserContext) ParserInterface {
+            return ParserInterface.create(ParserType, self, @ptrCast(@constCast(context)));
+        }
+
+        fn castContext(_: ParserType, ctx: *anyopaque) UserContext {
+            return @as(*const UserContext, @ptrCast(@alignCast(ctx))).*;
         }
     };
 }
