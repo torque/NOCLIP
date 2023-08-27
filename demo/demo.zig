@@ -30,6 +30,13 @@ const cli = cmd: {
         .description = "enum choice option",
         .nice_type_name = "choice",
     });
+    cmd.stringOption(.{
+        .name = "string",
+        .short_tag = "-s",
+        .long_tag = "--string",
+        .env_var = "NOCLIP_STRING",
+        .description = "A string value option",
+    });
     cmd.addOption(.{ .OutputType = u32 }, .{
         .name = "default",
         .short_tag = "-d",
@@ -80,8 +87,8 @@ const subcommand = cmd: {
         .falsy = .{ .long_tag = "--no-flag" },
         .env_var = "NOCLIP_SUBFLAG",
     });
-    cmd.addArgument(.{ .OutputType = []const u8 }, .{ .name = "argument" });
-    cmd.addArgument(.{ .OutputType = []const u8 }, .{
+    cmd.stringArgument(.{ .name = "argument" });
+    cmd.stringArgument(.{
         .name = "arg",
         .description = "This is an argument that doesn't really do anything, but it's very important.",
     });
@@ -95,6 +102,7 @@ fn subHandler(context: []const u8, result: subcommand.Output()) !void {
 
 fn cliHandler(context: *u32, result: cli.Output()) !void {
     std.debug.print("context: {d}\n", .{context.*});
+    std.debug.print("callback is working {s}\n", .{result.string orelse "null"});
     std.debug.print("callback is working {any}\n", .{result.choice});
     std.debug.print("callback is working {d}\n", .{result.default});
     context.* += 1;

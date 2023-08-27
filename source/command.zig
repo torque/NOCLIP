@@ -133,7 +133,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             self.help_flag = tags;
         }
 
-        const string_generics = BuilderGenerics(UserContext){ .OutputType = []const u8 };
+        const string_generics = BuilderGenerics(UserContext){ .OutputType = [:0]const u8 };
 
         pub fn stringOption(
             comptime self: *@This(),

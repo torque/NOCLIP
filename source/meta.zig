@@ -174,6 +174,39 @@ pub fn SliceIterator(comptime T: type) type {
     };
 }
 
+pub fn MutatingZSplitter(comptime T: type) type {
+    return struct {
+        buffer: [:0]T,
+        delimiter: T,
+        index: ?usize = 0,
+
+        const Self = @This();
+
+        /// Returns a slice of the next field, or null if splitting is complete.
+        pub fn next(self: *Self) ?[:0]T {
+            const start = self.index orelse return null;
+
+            const end = if (std.mem.indexOfScalarPos(T, self.buffer, start, self.delimiter)) |delim_idx| blk: {
+                self.buffer[delim_idx] = 0;
+                self.index = delim_idx + 1;
+                break :blk delim_idx;
+            } else blk: {
+                self.index = null;
+                break :blk self.buffer.len;
+            };
+
+            return self.buffer[start..end :0];
+        }
+
+        /// Returns a slice of the remaining bytes. Does not affect iterator state.
+        pub fn rest(self: Self) [:0]T {
+            const end = self.buffer.len;
+            const start = self.index orelse end;
+            return self.buffer[start..end :0];
+        }
+    };
+}
+
 pub fn copyStruct(comptime T: type, source: T, field_overrides: anytype) T {
     var result: T = undefined;
 

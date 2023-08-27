@@ -18,7 +18,7 @@ pub const FlagBias = enum {
     truthy,
     unbiased,
 
-    pub fn string(comptime self: @This()) []const u8 {
+    pub fn string(comptime self: @This()) [:0]const u8 {
         return switch (comptime self) {
             .truthy => "true",
             .falsy => "false",
@@ -110,12 +110,12 @@ pub const ParameterGenerics = struct {
 
     pub fn IntermediateValue(comptime self: @This()) type {
         return comptime switch (self.value_count) {
-            .flag => []const u8,
+            .flag => [:0]const u8,
             .count => usize,
             .fixed => |count| switch (count) {
                 0 => @compileError("bad fixed-zero parameter"),
-                1 => []const u8,
-                else => std.ArrayList([]const u8),
+                1 => [:0]const u8,
+                else => std.ArrayList([:0]const u8),
             },
         };
     }

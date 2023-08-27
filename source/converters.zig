@@ -61,7 +61,7 @@ fn MultiConverter(comptime gen: ParameterGenerics) ?ConverterSignature(gen) {
 
 fn FlagConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     return struct {
-        pub fn handler(_: gen.UserContext, input: []const u8, _: ErrorWriter) ConversionError!bool {
+        pub fn handler(_: gen.UserContext, input: [:0]const u8, _: ErrorWriter) ConversionError!bool {
             // treat an empty string as falsy
             if (input.len == 0) return false;
 
@@ -81,7 +81,7 @@ fn FlagConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
 
 fn StringConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     return struct {
-        pub fn handler(_: gen.UserContext, input: []const u8, _: ErrorWriter) ConversionError![]const u8 {
+        pub fn handler(_: gen.UserContext, input: [:0]const u8, _: ErrorWriter) ConversionError![:0]const u8 {
             return input;
         }
     }.handler;
@@ -91,7 +91,7 @@ fn IntConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     const IntType = gen.OutputType;
 
     return struct {
-        pub fn handler(_: gen.UserContext, input: []const u8, failure: ErrorWriter) ConversionError!IntType {
+        pub fn handler(_: gen.UserContext, input: [:0]const u8, failure: ErrorWriter) ConversionError!IntType {
             return std.fmt.parseInt(IntType, input, 0) catch {
                 try failure.print("cannot interpret \"{s}\" as an integer", .{input});
                 return ConversionError.ConversionFailed;
@@ -137,7 +137,7 @@ fn ChoiceConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     const EnumType = gen.OutputType;
 
     return struct {
-        pub fn handler(_: gen.UserContext, input: []const u8, failure: ErrorWriter) ConversionError!EnumType {
+        pub fn handler(_: gen.UserContext, input: [:0]const u8, failure: ErrorWriter) ConversionError!EnumType {
             return std.meta.stringToEnum(gen.ConvertedType(), input) orelse {
                 try failure.print("\"{s}\" is not a valid choice", .{input});
                 return ConversionError.ConversionFailed;

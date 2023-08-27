@@ -256,7 +256,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         fn parseLongTag(
             self: *@This(),
             name: []const u8,
-            arg: []const u8,
+            arg: [:0]u8,
             argit: *ncmeta.SliceIterator([][:0]u8),
         ) ParseError!void {
             if (comptime command.help_flag.long_tag) |long|
@@ -315,7 +315,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
         fn parseOrdinals(
             self: *@This(),
-            arg: []const u8,
+            arg: [:0]u8,
             argit: *ncmeta.SliceIterator([][:0]u8),
         ) ParseError!?ParserInterface {
             comptime var arg_index: u32 = 0;
@@ -373,12 +373,13 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                     0 => return ParseError.ExtraValue,
                     1 => try self.pushIntermediateValue(param, argit.next() orelse return ParseError.MissingValue),
                     else => |total| {
-                        var list = std.ArrayList([]const u8).initCapacity(self.allocator, total) catch
+                        var list = std.ArrayList([:0]const u8).initCapacity(self.allocator, total) catch
                             return ParseError.UnexpectedFailure;
 
                         var consumed: u32 = 0;
                         while (consumed < total) : (consumed += 1) {
                             const next = argit.next() orelse return ParseError.MissingValue;
+
                             list.append(next) catch return ParseError.UnexpectedFailure;
                         }
                         if (bounded and argit.next() != null) return ParseError.ExtraValue;
@@ -392,9 +393,9 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         fn applyFusedValues(
             self: *@This(),
             comptime param: anytype,
-            value: []const u8,
+            value: [:0]u8,
         ) ParseError!void {
-            var iter = std.mem.split(u8, value, ",");
+            var iter = ncmeta.MutatingZSplitter(u8){ .buffer = value, .delimiter = ',' };
             return try self.applyParamValues(param, &iter, true);
         }
 
@@ -402,7 +403,10 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             inline for (comptime parameters) |param| {
                 if (comptime param.env_var) |env_var| blk: {
                     if (@field(self.intermediate, param.name) != null) break :blk;
-                    const val = env.get(env_var) orelse break :blk;
+
+                    const val = self.allocator.dupeZ(u8, env.get(env_var) orelse break :blk) catch
+                        return ParseError.UnexpectedFailure;
+
                     if (comptime @TypeOf(param).G.value_count == .flag) {
                         try self.pushIntermediateValue(param, val);
                     } else {
