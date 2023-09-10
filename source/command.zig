@@ -72,6 +72,21 @@ fn BuilderGenerics(comptime UserContext: type) type {
     };
 }
 
+pub const GroupOptions = struct {
+    help_flag: ShortLongPair = .{ .short_tag = "-h", .long_tag = "--help" },
+    description: []const u8,
+};
+
+pub fn commandGroup(allocator: std.mem.Allocator, comptime options: GroupOptions) !ParserInterface {
+    const cmd = comptime CommandBuilder(void){
+        .help_flag = options.help_flag,
+        .description = options.description,
+        .subcommand_required = true,
+    };
+
+    return try cmd.createInterface(allocator, cmd.noopCallback());
+}
+
 fn InterfaceCreator(comptime Command: type) type {
     return if (Command.ICC.InputType()) |Type|
         struct {
@@ -327,6 +342,12 @@ pub fn CommandBuilder(comptime UserContext: type) type {
 
         pub fn generate(comptime self: @This()) self.param_spec.TupleType() {
             return self.param_spec.realTuple();
+        }
+
+        pub fn noopCallback(comptime self: @This()) self.CallbackSignature() {
+            return struct {
+                fn callback(_: UserContextType, _: self.Output()) !void {}
+            }.callback;
         }
 
         pub fn CallbackSignature(comptime self: @This()) type {

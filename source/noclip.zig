@@ -7,4 +7,5 @@ pub const parameters = @import("./parameters.zig");
 pub const parser = @import("./parser.zig");
 
 pub const CommandBuilder = command.CommandBuilder;
+pub const commandGroup = command.commandGroup;
 pub const ParserInterface = parser.ParserInterface;
