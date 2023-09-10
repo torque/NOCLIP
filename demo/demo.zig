@@ -113,17 +113,16 @@ pub fn main() !u8 {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var parser = try cli.createParser(cliHandler, allocator);
-    defer parser.deinitTree();
+    const base = try noclip.commandGroup(allocator, .{ .description = "base group" });
+    defer base.deinitTree();
 
     var context: u32 = 2;
     const sc: []const u8 = "whassup";
 
-    var subcon = try subcommand.createParser(subHandler, allocator);
-    try parser.addSubcommand("verb", subcon.interface(&sc));
+    try base.addSubcommand("main", try cli.createInterface(allocator, cliHandler, &context));
+    try base.addSubcommand("other", try subcommand.createInterface(allocator, subHandler, &sc));
 
-    const iface = parser.interface(&context);
-    iface.execute() catch return 1;
+    try base.execute();
 
     return 0;
 }
