@@ -72,6 +72,61 @@ fn BuilderGenerics(comptime UserContext: type) type {
     };
 }
 
+fn InterfaceCreator(comptime Command: type) type {
+    return if (Command.ICC.InputType()) |Type|
+        struct {
+            pub fn createInterface(
+                comptime self: Command,
+                allocator: std.mem.Allocator,
+                comptime callback: self.CallbackSignature(),
+                context: Type,
+            ) !ParserInterface {
+                return try self._createInterfaceImpl(allocator, callback, context);
+            }
+        }
+    else
+        struct {
+            pub fn createInterface(
+                comptime self: Command,
+                allocator: std.mem.Allocator,
+                comptime callback: self.CallbackSignature(),
+            ) !ParserInterface {
+                return try self._createInterfaceImpl(allocator, callback, void{});
+            }
+        };
+}
+
+pub const InterfaceContextCategory = union(enum) {
+    empty,
+    pointer: type,
+    value: type,
+
+    pub fn fromType(comptime ContextType: type) InterfaceContextCategory {
+        return switch (@typeInfo(ContextType)) {
+            .Void => .empty,
+            .Pointer => |info| if (info.size == .Slice) .{ .value = ContextType } else .{ .pointer = ContextType },
+            // technically, i0, u0, and struct{} should be treated as empty, probably
+            else => .{ .value = ContextType },
+        };
+    }
+
+    pub fn InputType(comptime self: InterfaceContextCategory) ?type {
+        return switch (self) {
+            .empty => null,
+            .pointer => |Type| Type,
+            .value => |Type| *const Type,
+        };
+    }
+
+    pub fn OutputType(comptime self: InterfaceContextCategory) type {
+        return switch (self) {
+            .empty => void,
+            .pointer => |Type| Type,
+            .value => |Type| Type,
+        };
+    }
+};
+
 pub fn CommandBuilder(comptime UserContext: type) type {
     return struct {
         param_spec: ncmeta.TupleBuilder = .{},
@@ -82,6 +137,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
         description: []const u8,
 
         pub const UserContextType = UserContext;
+        pub const ICC: InterfaceContextCategory = InterfaceContextCategory.fromType(UserContextType);
 
         pub fn createParser(
             comptime self: @This(),
@@ -101,11 +157,13 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             };
         }
 
-        pub fn createInterface(
+        pub usingnamespace InterfaceCreator(@This());
+
+        fn _createInterfaceImpl(
             comptime self: @This(),
-            comptime callback: self.CallbackSignature(),
             allocator: std.mem.Allocator,
-            context: UserContextType,
+            comptime callback: self.CallbackSignature(),
+            context: (ICC.InputType() orelse void),
         ) !ParserInterface {
             var arena = try allocator.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(allocator);
@@ -119,7 +177,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                 .help_builder = help.HelpBuilder(self).init(arena_alloc),
             };
 
-            if (UserContextType == void) {
+            if (comptime ICC == .empty) {
                 return this_parser.interface();
             } else {
                 return this_parser.interface(context);
@@ -272,7 +330,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
         }
 
         pub fn CallbackSignature(comptime self: @This()) type {
-            return *const fn (UserContext, self.Output()) anyerror!void;
+            return *const fn (UserContextType, self.Output()) anyerror!void;
         }
 
         pub fn Output(comptime self: @This()) type {

@@ -99,7 +99,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
         // This is a slightly annoying hack to work around the fact that there's no way
         // to provide a method signature conditionally.
-        pub usingnamespace InterfaceGen(@This(), UserContext);
+        pub usingnamespace InterfaceGen(@This(), @TypeOf(command).ICC);
         // This is attached to the struct this way because these are all "private"
         // methods that exist exclusively to cast the type-erased interface object back
         // into something usable. Their implementations aren't meaningful and just
@@ -536,32 +536,35 @@ fn InterfaceWrappers(comptime ParserType: type) type {
     };
 }
 
-fn InterfaceGen(comptime ParserType: type, comptime UserContext: type) type {
-    const CtxInfo = @typeInfo(UserContext);
+// TODO: figure out a better way of consolidating this logic with that in command.zig?
+fn InterfaceGen(comptime ParserType: type, comptime ICC: anytype) type {
+    return switch (ICC) {
+        .empty => struct {
+            pub fn interface(self: *ParserType) ParserInterface {
+                return ParserInterface.create(ParserType, self, @constCast(&void{}));
+            }
 
-    return if (CtxInfo == .Void) struct {
-        pub fn interface(self: *ParserType) ParserInterface {
-            return ParserInterface.create(ParserType, self, @constCast(&void{}));
-        }
+            fn castContext(_: ParserType, _: *anyopaque) void {
+                return void{};
+            }
+        },
+        .pointer => struct {
+            pub fn interface(self: *ParserType, context: ICC.InputType().?) ParserInterface {
+                return ParserInterface.create(ParserType, self, @constCast(context));
+            }
 
-        fn castContext(_: ParserType, _: *anyopaque) void {
-            return void{};
-        }
-    } else if (CtxInfo == .Pointer and CtxInfo.Pointer.size != .Slice) struct {
-        pub fn interface(self: *ParserType, context: UserContext) ParserInterface {
-            return ParserInterface.create(ParserType, self, @constCast(context));
-        }
+            fn castContext(_: ParserType, ctx: *anyopaque) ICC.OutputType() {
+                return @ptrCast(@alignCast(ctx));
+            }
+        },
+        .value => struct {
+            pub fn interface(self: *ParserType, context: ICC.InputType().?) ParserInterface {
+                return ParserInterface.create(ParserType, self, @ptrCast(@constCast(context)));
+            }
 
-        fn castContext(_: ParserType, ctx: *anyopaque) UserContext {
-            return @ptrCast(@alignCast(ctx));
-        }
-    } else struct {
-        pub fn interface(self: *ParserType, context: *const UserContext) ParserInterface {
-            return ParserInterface.create(ParserType, self, @ptrCast(@constCast(context)));
-        }
-
-        fn castContext(_: ParserType, ctx: *anyopaque) UserContext {
-            return @as(*const UserContext, @ptrCast(@alignCast(ctx))).*;
-        }
+            fn castContext(_: ParserType, ctx: *anyopaque) ICC.OutputType() {
+                return @as(ICC.InputType().?, @ptrCast(@alignCast(ctx))).*;
+            }
+        },
     };
 }
