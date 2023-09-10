@@ -53,6 +53,8 @@ pub fn StructuredPrinter(comptime Writer: type) type {
             // TODO: lol return a real error
             if (indent >= self.wrap_width) return NoclipError.UnexpectedFailure;
 
+            if (text.len == 0) return;
+
             // this assumes output stream has already had the first line properly
             // indented.
             var splitter = std.mem.split(u8, text, "\n");
@@ -227,8 +229,6 @@ pub fn HelpBuilder(comptime command: anytype) type {
 
             var just: usize = 0;
             inline for (comptime help_info.arguments) |arg| {
-                if (comptime arg.description.len == 0) continue;
-
                 const pair: AlignablePair = .{
                     .left = arg.name,
                     .right = arg.description,
