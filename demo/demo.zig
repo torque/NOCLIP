@@ -11,6 +11,19 @@ const cli = cmd: {
         \\The definitive noclip demonstration utility
         \\
         \\This command demonstrates the functionality of the noclip library. cool!
+        \\
+        \\> // implementing factorial recursively is a silly thing to do
+        \\> pub fn fact(n: u64) u64 {
+        \\>     if (n == 0) return 1;
+        \\>     return n*fact(n - 1);
+        \\> }
+        \\
+        \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
+        \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+        \\nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+        \\Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore
+        \\eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident,
+        \\sunt in culpa qui officia deserunt mollit anim id est laborum.
         ,
     };
     cmd.addOption(.{ .OutputType = struct { u8, u8 } }, .{
