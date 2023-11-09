@@ -65,6 +65,17 @@ pub fn StructuredPrinter(comptime Writer: type) type {
                     // we have a trailing line that needs to be cleaned up
                     if (location > indent)
                         _ = try self.clearLine(indent);
+
+                    location = try self.clearLine(indent);
+                    continue;
+                }
+
+                if (line[0] == '>') maybe: {
+                    if (line.len > 1) {
+                        if (line[1] == ' ') {
+                            try self.writer.writeAll(line[2..]);
+                        } else break :maybe;
+                    }
                     location = try self.clearLine(indent);
                     continue;
                 }
@@ -101,6 +112,7 @@ pub fn StructuredPrinter(comptime Writer: type) type {
                     }
                     if (location > indent)
                         try self.writer.writeByte(' ');
+
                     try self.writer.writeAll(choppee[0..split]);
                     location = try self.clearLine(indent);
                     choppee = choppee[split + 1 ..];
