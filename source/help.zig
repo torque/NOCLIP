@@ -360,11 +360,10 @@ pub fn HelpBuilder(comptime command: anytype) type {
             defer pairs.deinit();
 
             var just: usize = 0;
-            var iter = subcommands.keyIterator();
-            while (iter.next()) |key| {
+            for (subcommands.keys()) |key| {
                 const pair: AlignablePair = .{
-                    .left = key.*,
-                    .right = subcommands.get(key.*).?.describe(),
+                    .left = key,
+                    .right = subcommands.get(key).?.describe(),
                 };
                 if (pair.left.len > just) just = pair.left.len;
                 try pairs.append(pair);

@@ -167,7 +167,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             return Parser(self, callback){
                 .arena = arena,
                 .allocator = arena_alloc,
-                .subcommands = std.hash_map.StringHashMap(ParserInterface).init(arena_alloc),
+                .subcommands = parser.CommandMap.init(arena_alloc),
                 .help_builder = help.HelpBuilder(self).init(arena_alloc),
             };
         }
@@ -188,7 +188,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             this_parser.* = .{
                 .arena = arena,
                 .allocator = arena_alloc,
-                .subcommands = std.hash_map.StringHashMap(ParserInterface).init(arena_alloc),
+                .subcommands = parser.CommandMap.init(arena_alloc),
                 .help_builder = help.HelpBuilder(self).init(arena_alloc),
             };
 
