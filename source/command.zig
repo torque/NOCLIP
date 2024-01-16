@@ -372,7 +372,9 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     // global tags and env_vars would conflict, which is less common.
                     if (param.short_tag) |short|
                         tag_fields = tag_fields ++ &[_]StructField{.{
-                            .name = short,
+                            // this goofy construct coerces the comptime []const u8 to
+                            // [:0]const u8.
+                            .name = short ++ "",
                             .type = void,
                             .default_value = null,
                             .is_comptime = false,
@@ -381,7 +383,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
 
                     if (param.long_tag) |long|
                         tag_fields = tag_fields ++ &[_]StructField{.{
-                            .name = long,
+                            .name = long ++ "",
                             .type = void,
                             .default_value = null,
                             .is_comptime = false,
@@ -390,7 +392,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
 
                     if (param.env_var) |env_var|
                         env_var_fields = env_var_fields ++ &[_]StructField{.{
-                            .name = env_var,
+                            .name = env_var ++ "",
                             .type = void,
                             .default_value = null,
                             .is_comptime = false,
@@ -435,7 +437,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     const default = if (param.default) |def| &@as(FieldType, def) else @as(?*const anyopaque, null);
 
                     fields = fields ++ &[_]StructField{.{
-                        .name = param.name,
+                        .name = param.name ++ "",
                         .type = FieldType,
                         .default_value = @ptrCast(default),
                         .is_comptime = false,
@@ -505,7 +507,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                         ?PType.G.IntermediateType();
 
                     fields = &(@as([fields.len]StructField, fields[0..fields.len].*) ++ [1]StructField{.{
-                        .name = param.name,
+                        .name = param.name ++ "",
                         .type = FieldType,
                         .default_value = @ptrCast(&@as(
                             FieldType,
