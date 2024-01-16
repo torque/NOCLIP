@@ -1,0 +1,11 @@
+.{
+    .name = "NOCLIP",
+    .version = "0.1.0-pre",
+    .dependencies = .{},
+    .paths = .{
+        "source",
+        "build.zig",
+        "build.zig.zon",
+        "license",
+    },
+}

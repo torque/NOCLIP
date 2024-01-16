@@ -1,11 +1,11 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target: std.zig.CrossTarget = b.standardTargetOptions(.{});
+    const target: std.Build.ResolvedTarget = b.standardTargetOptions(.{});
     const optimize: std.builtin.Mode = b.standardOptimizeOption(.{});
 
     const noclip = b.addModule("noclip", .{
-        .source_file = .{ .path = "source/noclip.zig" },
+        .root_source_file = .{ .path = "source/noclip.zig" },
     });
 
     demo(b, noclip, target, optimize);
@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
 fn demo(
     b: *std.Build,
     noclip: *std.Build.Module,
-    target: std.zig.CrossTarget,
+    target: std.Build.ResolvedTarget,
     optimize: std.builtin.Mode,
 ) void {
     const demo_step = b.step("demo", "Build and install CLI demo program");
@@ -35,7 +35,7 @@ fn demo(
         .target = target,
         .optimize = optimize,
     });
-    exe.addModule("noclip", noclip);
+    exe.root_module.addImport("noclip", noclip);
     const install_demo = b.addInstallArtifact(exe, .{});
 
     demo_step.dependOn(&install_demo.step);
