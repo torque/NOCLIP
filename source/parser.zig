@@ -160,7 +160,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
         pub fn execute(self: *@This(), context: UserContext) anyerror!void {
             const args = try std.process.argsAlloc(self.allocator);
-            var env = try std.process.getEnvMap(self.allocator);
+            const env = try std.process.getEnvMap(self.allocator);
 
             if (args.len < 1) return ParseError.EmptyArgs;
 
