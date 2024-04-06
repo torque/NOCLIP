@@ -8,15 +8,15 @@ const Choice = enum { first, second };
 const cli = cmd: {
     var cmd = CommandBuilder(*u32){
         .description =
-        \\The definitive noclip demonstration utility
+        \\The definitive noclip demonstration utility.
         \\
         \\This command demonstrates the functionality of the noclip library. cool!
         \\
-        \\> // implementing factorial recursively is a silly thing to do
-        \\> pub fn fact(n: u64) u64 {
-        \\>     if (n == 0) return 1;
-        \\>     return n*fact(n - 1);
-        \\> }
+        \\>     // implementing factorial recursively is a silly thing to do
+        \\>     pub fn fact(n: u64) u64 {
+        \\>         if (n == 0) return 1;
+        \\>         return n*fact(n - 1);
+        \\>     }
         \\
         \\Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
         \\incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
@@ -134,6 +134,16 @@ pub fn main() !u8 {
 
     try base.addSubcommand("main", try cli.createInterface(allocator, cliHandler, &context));
     try base.addSubcommand("other", try subcommand.createInterface(allocator, subHandler, &sc));
+
+    const group = try noclip.commandGroup(allocator, .{ .description = "final level of a deeply nested subcommand" });
+    const subcon = try noclip.commandGroup(allocator, .{ .description = "third level of a deeply nested subcommand" });
+    const nested = try noclip.commandGroup(allocator, .{ .description = "second level of a deeply nested subcommand" });
+    const deeply = try noclip.commandGroup(allocator, .{ .description = "start of a deeply nested subcommand" });
+    try base.addSubcommand("deeply", deeply);
+    try deeply.addSubcommand("nested", nested);
+    try nested.addSubcommand("subcommand", subcon);
+    try subcon.addSubcommand("group", group);
+    try group.addSubcommand("run", try cli.createInterface(allocator, cliHandler, &context));
 
     try base.execute();
 
