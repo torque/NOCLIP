@@ -145,7 +145,10 @@ pub fn main() !u8 {
     try subcon.addSubcommand("group", group);
     try group.addSubcommand("run", try cli.createInterface(allocator, cliHandler, &context));
 
-    try base.execute();
+    base.execute() catch |err| {
+        std.io.getStdErr().writeAll(base.getParseError()) catch {};
+        return err;
+    };
 
     return 0;
 }

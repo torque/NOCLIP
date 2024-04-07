@@ -12,6 +12,7 @@ pub const ParserInterface = struct {
         execute: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!void,
         parse: *const fn (parser: *anyopaque, context: *anyopaque, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!?ParseResult,
         finish: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!?ParserInterface,
+        getParseError: *const fn (parser: *anyopaque) []const u8,
         addSubcommand: *const fn (parser: *anyopaque, name: []const u8, subcommand: ParserInterface) std.mem.Allocator.Error!void,
         getSubcommand: *const fn (parser: *anyopaque, name: []const u8) ?ParserInterface,
         describe: *const fn () []const u8,
@@ -31,6 +32,7 @@ pub const ParserInterface = struct {
                 .execute = ParserType._wrapExecute,
                 .parse = ParserType._wrapParse,
                 .finish = ParserType._wrapFinish,
+                .getParseError = ParserType._wrapGetParseError,
                 .addSubcommand = ParserType._wrapAddSubcommand,
                 .getSubcommand = ParserType._wrapGetSubcommand,
                 .describe = ParserType._wrapDescribe,
@@ -50,6 +52,10 @@ pub const ParserInterface = struct {
 
     pub fn finish(self: @This()) anyerror!?ParserInterface {
         return try self.methods.finish(self.parser, self.context);
+    }
+
+    pub fn getParseError(self: @This()) []const u8 {
+        return self.methods.getParseError(self.parser);
     }
 
     pub fn addSubcommand(self: @This(), name: []const u8, subcommand: ParserInterface) std.mem.Allocator.Error!void {
@@ -96,6 +102,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         allocator: std.mem.Allocator,
         subcommands: CommandMap,
         subcommand: ?ParserInterface = null,
+        error_message: std.ArrayListUnmanaged(u8) = .{},
         help_builder: help.HelpBuilder(command),
 
         // This is a slightly annoying hack to work around the fact that there's no way
@@ -108,23 +115,47 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
         pub usingnamespace InterfaceWrappers(@This());
 
         pub fn execute(self: *@This(), context: UserContext) anyerror!void {
-            const args = try std.process.argsAlloc(self.allocator);
-            const env = try std.process.getEnvMap(self.allocator);
+            const args = std.process.argsAlloc(self.allocator) catch |err| {
+                try self.error_message.appendSlice(
+                    self.allocator,
+                    "Failed to allocate process arg vector\n",
+                );
+                return err;
+            };
+            const env = std.process.getEnvMap(self.allocator) catch |err| {
+                try self.error_message.appendSlice(
+                    self.allocator,
+                    "Failed to allocate process environment variable map\n",
+                );
+                return err;
+            };
 
-            if (args.len < 1) return ParseError.EmptyArgs;
+            if (args.len < 1) {
+                try self.error_message.appendSlice(
+                    self.allocator,
+                    "The argument list for the base CLI entry point is empty.\n",
+                );
+                return ParseError.EmptyArgs;
+            }
 
             self.progname = std.fs.path.basename(args[0]);
 
             {
                 var subc = try self.subparse(context, self.progname.?, args[1..], env);
                 while (subc) |next| {
-                    subc = try next.parser.parse(next.name, next.args, env);
+                    subc = next.parser.parse(next.name, next.args, env) catch |err| {
+                        try self.error_message.appendSlice(self.allocator, next.parser.getParseError());
+                        return err;
+                    };
                 }
             }
             {
                 var subc = try self.finish(context);
                 while (subc) |next| {
-                    subc = try next.finish();
+                    subc = next.finish() catch |err| {
+                        try self.error_message.appendSlice(self.allocator, next.getParseError());
+                        return err;
+                    };
                 }
             }
         }
@@ -161,6 +192,13 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
             try self.convert(context);
             try callback(context, self.output);
             return self.subcommand;
+        }
+
+        pub fn getParseError(self: @This()) []const u8 {
+            return if (self.error_message.items.len == 0)
+                "An unexpected error occurred.\n"
+            else
+                self.error_message.items;
         }
 
         pub fn deinit(self: @This()) void {
@@ -292,6 +330,10 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 }
             }
 
+            try self.error_message.writer(self.allocator).print(
+                "Could not parse command line: unknown option \"{s}\"\n",
+                .{arg},
+            );
             return ParseError.UnknownLongTagParameter;
         }
 
@@ -314,14 +356,23 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
                 if (arg == tag[1]) {
                     if (comptime !PType.is_flag)
-                        if (remaining > 0)
+                        if (remaining > 0) {
+                            try self.error_message.writer(self.allocator).print(
+                                "Could not parse command line: \"-{c}\" is fused to another flag, but it requires a value\n",
+                                .{arg},
+                            );
                             return ParseError.FusedShortTagValueMissing;
+                        };
 
                     try self.applyParamValues(param, argit, false);
                     return;
                 }
             }
 
+            try self.error_message.writer(self.allocator).print(
+                "Could not parse command line: unknown option \"-{c}\"\n",
+                .{arg},
+            );
             return ParseError.UnknownShortTagParameter;
         }
 
@@ -348,7 +399,20 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 arg_index += 1;
             }
 
-            return self.subcommands.get(arg) orelse ParseError.ExtraValue;
+            return self.subcommands.get(arg) orelse {
+                const writer = self.error_message.writer(self.allocator);
+                if (self.subcommands.count() > 0)
+                    try writer.print(
+                        "Could not parse command line: unknown subcommand \"{s}\"\n",
+                        .{arg},
+                    )
+                else
+                    try writer.print(
+                        "Could not parse command line: unexpected extra argument \"{s}\"\n",
+                        .{arg},
+                    );
+                return ParseError.ExtraValue;
+            };
         }
 
         fn pushIntermediateValue(
@@ -363,7 +427,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 if (@field(self.intermediate, param.name) == null) {
                     @field(self.intermediate, param.name) = gen.IntermediateType().init(self.allocator);
                 }
-                @field(self.intermediate, param.name).?.append(value) catch return ParseError.UnexpectedFailure;
+                try @field(self.intermediate, param.name).?.append(value);
             } else if (comptime @TypeOf(param).G.nonscalar()) {
                 if (@field(self.intermediate, param.name)) |list| list.deinit();
                 @field(self.intermediate, param.name) = value;
@@ -382,19 +446,54 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 .flag => try self.pushIntermediateValue(param, comptime param.flag_bias.string()),
                 .count => @field(self.intermediate, param.name) += 1,
                 .fixed => |count| switch (count) {
-                    0 => return ParseError.ExtraValue,
-                    1 => try self.pushIntermediateValue(param, argit.next() orelse return ParseError.MissingValue),
+                    0 => {
+                        const writer = self.error_message.writer(self.allocator);
+                        const desc = try param.describe(self.allocator);
+                        defer self.allocator.free(desc);
+                        try writer.print(
+                            "Could not parse command line: {s} takes no value.\n",
+                            .{desc},
+                        );
+                        return ParseError.ExtraValue;
+                    },
+                    1 => try self.pushIntermediateValue(param, argit.next() orelse {
+                        const writer = self.error_message.writer(self.allocator);
+                        const desc = try param.describe(self.allocator);
+                        defer self.allocator.free(desc);
+                        try writer.print(
+                            "Could not parse command line: {s} requires a value.\n",
+                            .{desc},
+                        );
+                        return ParseError.MissingValue;
+                    }),
                     else => |total| {
-                        var list = std.ArrayList([:0]const u8).initCapacity(self.allocator, total) catch
-                            return ParseError.UnexpectedFailure;
+                        var list = try std.ArrayList([:0]const u8).initCapacity(self.allocator, total);
 
                         var consumed: u32 = 0;
                         while (consumed < total) : (consumed += 1) {
-                            const next = argit.next() orelse return ParseError.MissingValue;
+                            const next = argit.next() orelse {
+                                const writer = self.error_message.writer(self.allocator);
+                                const desc = try param.describe(self.allocator);
+                                defer self.allocator.free(desc);
+                                try writer.print(
+                                    "Could not parse command line: {s} is missing one or more values (need {d}, got {d}).\n",
+                                    .{ desc, total, consumed },
+                                );
+                                return ParseError.MissingValue;
+                            };
 
-                            list.append(next) catch return ParseError.UnexpectedFailure;
+                            list.appendAssumeCapacity(next);
                         }
-                        if (bounded and argit.next() != null) return ParseError.ExtraValue;
+                        if (bounded and argit.next() != null) {
+                            const writer = self.error_message.writer(self.allocator);
+                            const desc = try param.describe(self.allocator);
+                            defer self.allocator.free(desc);
+                            try writer.print(
+                                "Could not parse command line: {s} has too many values (need {d}).\n",
+                                .{ desc, total },
+                            );
+                            return ParseError.ExtraValue;
+                        }
 
                         try self.pushIntermediateValue(param, list);
                     },
@@ -416,8 +515,7 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
                 if (comptime param.env_var) |env_var| blk: {
                     if (@field(self.intermediate, param.name) != null) break :blk;
 
-                    const val = self.allocator.dupeZ(u8, env.get(env_var) orelse break :blk) catch
-                        return ParseError.UnexpectedFailure;
+                    const val = try self.allocator.dupeZ(u8, env.get(env_var) orelse break :blk);
 
                     if (comptime @TypeOf(param).G.value_count == .flag) {
                         try self.pushIntermediateValue(param, val);
@@ -451,19 +549,27 @@ pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
 
                 if (comptime @TypeOf(param).has_output) {
                     @field(self.output, param.name) = param.converter(context, intermediate, writer) catch |err| {
-                        const stderr = std.io.getStdErr().writer();
-                        stderr.print("Error parsing option \"{s}\": {s}\n", .{ param.name, buffer.items }) catch {};
+                        const err_writer = self.error_message.writer(self.allocator);
+                        const desc = try param.describe(self.allocator);
+                        defer self.allocator.free(desc);
+                        try err_writer.print("Error parsing option {s}: {s}\n", .{ desc, buffer.items });
                         return err;
                     };
                 } else {
                     param.converter(context, intermediate, writer) catch |err| {
-                        const stderr = std.io.getStdErr().writer();
-                        stderr.print("Error parsing option \"{s}\": {s}\n", .{ param.name, buffer.items }) catch {};
+                        const err_writer = self.error_message.writer(self.allocator);
+                        const desc = try param.describe(self.allocator);
+                        defer self.allocator.free(desc);
+                        try err_writer.print("Error parsing option {s}: {s}\n", .{ desc, buffer.items });
                         return err;
                     };
                 }
             } else {
                 if (comptime param.required) {
+                    const err_writer = self.error_message.writer(self.allocator);
+                    const desc = try param.describe(self.allocator);
+                    defer self.allocator.free(desc);
+                    try err_writer.print("Could not parse command line: required parameter {s} is missing\n", .{desc});
                     return ParseError.RequiredParameterMissing;
                 } else if (comptime @TypeOf(param).has_output) {
                     if (comptime param.default) |def| {
@@ -520,6 +626,11 @@ fn InterfaceWrappers(comptime ParserType: type) type {
             const self = castInterfaceParser(parser);
             const context = self.castContext(ctx);
             return try self.finish(context);
+        }
+
+        fn _wrapGetParseError(parser: *anyopaque) []const u8 {
+            const self = castInterfaceParser(parser);
+            return self.getParseError();
         }
 
         fn _wrapAddSubcommand(parser: *anyopaque, name: []const u8, subcommand: ParserInterface) !void {
