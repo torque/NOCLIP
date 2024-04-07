@@ -12,6 +12,7 @@ pub const ParseError = error{
     UnknownLongTagParameter,
     UnknownShortTagParameter,
     RequiredParameterMissing,
+    OutOfMemory,
 };
 
 pub const NoclipError = ParseError || ConversionError;

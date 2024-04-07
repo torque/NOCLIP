@@ -223,6 +223,26 @@ fn OptionType(comptime generics: ParameterGenerics) type {
         /// want weird things to happen.
         flag_bias: FlagBias,
 
+        pub fn describe(self: @This(), allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
+            var buf = std.ArrayList(u8).init(allocator);
+
+            try buf.append('"');
+            try buf.appendSlice(self.name);
+            try buf.append('"');
+            if (self.short_tag != null or self.long_tag != null) {
+                try buf.appendSlice(" (");
+                if (self.short_tag) |short|
+                    try buf.appendSlice(short);
+                if (self.short_tag != null and self.long_tag != null)
+                    try buf.appendSlice(", ");
+                if (self.long_tag) |long|
+                    try buf.appendSlice(long);
+                try buf.append(')');
+            }
+
+            return try buf.toOwnedSlice();
+        }
+
         pub fn IntermediateValue(comptime _: @This()) type {
             return generics.IntermediateValue();
         }
