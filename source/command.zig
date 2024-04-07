@@ -446,21 +446,21 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                 }
 
                 _ = @Type(.{ .Struct = .{
-                    .layout = .Auto,
+                    .layout = .auto,
                     .fields = tag_fields,
                     .decls = &.{},
                     .is_tuple = false,
                 } });
 
                 _ = @Type(.{ .Struct = .{
-                    .layout = .Auto,
+                    .layout = .auto,
                     .fields = env_var_fields,
                     .decls = &.{},
                     .is_tuple = false,
                 } });
 
                 return @Type(.{ .Struct = .{
-                    .layout = .Auto,
+                    .layout = .auto,
                     .fields = fields,
                     .decls = &.{},
                     .is_tuple = false,
@@ -519,7 +519,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                 }
 
                 return @Type(.{ .Struct = .{
-                    .layout = .Auto,
+                    .layout = .auto,
                     .fields = fields,
                     .decls = &.{},
                     .is_tuple = false,

@@ -265,7 +265,7 @@ pub const TupleBuilder = struct {
             }
 
             return @Type(.{ .Struct = .{
-                .layout = .Auto,
+                .layout = .auto,
                 .fields = &fields,
                 .decls = &.{},
                 .is_tuple = true,
