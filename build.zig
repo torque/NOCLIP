@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize: std.builtin.Mode = b.standardOptimizeOption(.{});
 
     const noclip = b.addModule("noclip", .{
-        .root_source_file = .{ .path = "source/noclip.zig" },
+        .root_source_file = b.path("source/noclip.zig"),
     });
 
     demo(b, noclip, target, optimize);
@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     const tests = b.addTest(.{
         .name = "tests",
-        .root_source_file = .{ .path = "source/noclip.zig" },
+        .root_source_file = b.path("source/noclip.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -31,7 +31,7 @@ fn demo(
 
     const exe = b.addExecutable(.{
         .name = "noclip-demo",
-        .root_source_file = .{ .path = "demo/demo.zig" },
+        .root_source_file = b.path("demo/demo.zig"),
         .target = target,
         .optimize = optimize,
     });

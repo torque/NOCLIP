@@ -22,7 +22,7 @@ ____
 
 == Hello
 
-Requires Zig `0.11.x`.
+Requires Zig `0.13.x`. May work with `0.12.x`.
 
 === Features
 
