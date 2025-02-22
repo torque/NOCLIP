@@ -1,693 +1,334 @@
-const std = @import("std");
-
-const errors = @import("./errors.zig");
-const help = @import("./help.zig");
-const ncmeta = @import("./meta.zig");
-
-const ParseError = errors.ParseError;
-const NoclipError = errors.NoclipError;
-
-pub const ParserInterface = struct {
-    const Vtable = struct {
-        execute: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!void,
-        parse: *const fn (parser: *anyopaque, context: *anyopaque, name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!?ParseResult,
-        finish: *const fn (parser: *anyopaque, context: *anyopaque) anyerror!?ParserInterface,
-        getParseError: *const fn (parser: *anyopaque) []const u8,
-        addSubcommand: *const fn (parser: *anyopaque, name: []const u8, subcommand: ParserInterface) std.mem.Allocator.Error!void,
-        getSubcommand: *const fn (parser: *anyopaque, name: []const u8) ?ParserInterface,
-        describe: *const fn () []const u8,
-        deinit: *const fn (parser: *anyopaque) void,
-        deinitTree: *const fn (parser: *anyopaque) void,
+fn Short(comptime spec: type) type {
+    return struct {
+        param: noclip.Codepoint,
+        eager: bool,
+        mutator: Mutator(spec),
     };
+}
 
-    parser: *anyopaque,
-    context: *anyopaque,
-    methods: *const Vtable,
+fn Long(comptime spec: type) type {
+    return struct {
+        param: []const u8,
+        eager: bool,
+        mutator: Mutator(spec),
+    };
+}
 
-    fn create(comptime ParserType: type, parser: *anyopaque, context: *anyopaque) @This() {
-        return .{
-            .parser = parser,
-            .context = context,
-            .methods = &.{
-                .execute = ParserType._wrapExecute,
-                .parse = ParserType._wrapParse,
-                .finish = ParserType._wrapFinish,
-                .getParseError = ParserType._wrapGetParseError,
-                .addSubcommand = ParserType._wrapAddSubcommand,
-                .getSubcommand = ParserType._wrapGetSubcommand,
-                .describe = ParserType._wrapDescribe,
-                .deinit = ParserType._wrapDeinit,
-                .deinitTree = ParserType._wrapDeinitTree,
+pub fn Parser(comptime spec: type) type {
+    return struct {
+        // this gets heap allocated because it cannot survive being copied
+        arena: *std.heap.ArenaAllocator,
+        context: ContextType(spec),
+        globals: GlobalParams,
+        locals: LocalParams,
+
+        pub fn init(alloc: std.mem.Allocator, context: ContextType(spec)) !Self {
+            const arena = try alloc.create(std.heap.ArenaAllocator);
+            arena.* = std.heap.ArenaAllocator.init(alloc);
+
+            const globals: GlobalParams, const locals: LocalParams = comptime blk: {
+                var params: struct { global: GlobalParams, local: LocalParams } = .{
+                    .global = .{ .short = &.{}, .long = &.{} },
+                    .local = .{ .short = &.{}, .long = &.{}, .args = &.{} },
+                };
+
+                for (@typeInfo(@TypeOf(spec.parameters)).@"struct".decls) |dinf| {
+                    const decl = @field(@TypeOf(spec.parameters), dinf.name);
+                    switch (@TypeOf(decl).param_type) {
+                        .flag => {
+                            for (.{ "truthy", "falsy" }, .{ true, false }) |bias, value| {
+                                for (.{ "short", "long" }) |style| {
+                                    if (@field(@field(decl, bias), style)) |unw| {
+                                        @field(@field(params, @tagName(decl.scope)), style) = @field(@field(params, @tagName(decl.scope)), style) ++ &.{
+                                            .{
+                                                .param = unw,
+                                                .mutator = implicitSetter(spec, dinf.name, value),
+                                            },
+                                        };
+                                    }
+                                }
+                            }
+                        },
+                        .option => {
+                            for (.{ "short", "long" }) |style| {
+                                if (@field(decl, style)) |unw| {
+                                    @field(@field(params, @tagName(decl.scope)), style) = @field(@field(params, @tagName(decl.scope)), style) ++ &.{.{
+                                        .param = unw,
+                                        .mutator = defaultMutator(spec, dinf.name),
+                                    }};
+                                }
+                            }
+                        },
+                        .argument => {},
+                    }
+                    break :blk .{ params.global, params.local };
+                }
+            };
+
+            return .{
+                .arena = arena,
+                .context = context,
+                .globals = globals,
+                .locals = locals,
+            };
+        }
+
+        pub fn deinit(self: Self) void {
+            const pa = self.arena.child_allocator;
+            self.arena.deinit();
+            pa.destroy(self.arena);
+        }
+
+        const Self = @This();
+        const GlobalParams = struct {
+            short: []const Short(spec),
+            long: []const Long(spec),
+        };
+        const LocalParams = struct {
+            short: []const Short(spec),
+            long: []const Long(spec),
+            args: []const Mutator(spec),
+        };
+    };
+}
+
+pub fn Result(comptime spec: type) type {
+    comptime {
+        var out: std.builtin.Type = .{
+            .@"struct" = .{
+                .layout = .auto,
+                .fields = &.{},
+                .decls = &.{},
+                .is_tuple = false,
             },
         };
+
+        for (@typeInfo(@TypeOf(spec.parameters)).@"struct".decls) |df| {
+            const decl = @field(spec.parameters, df.name);
+            const ftype = if (decl.default != null) @TypeOf(decl).Result else ?@TypeOf(decl).Result;
+            out.@"struct".fields = out.@"struct".fields ++ &.{.{
+                .name = df.name,
+                .type = ftype,
+                .default_value = decl.default orelse null,
+                .is_comptime = false,
+                .alignment = @alignOf(ftype),
+            }};
+        }
+
+        return @Type(out);
     }
+}
 
-    pub fn execute(self: @This()) anyerror!void {
-        return try self.methods.execute(self.parser, self.context);
+pub fn FieldType(comptime T: type, comptime field: []const u8) type {
+    // return @FieldType(T, field);
+    return switch (@typeInfo(T)) {
+        .Enum => |ti| ti.tag_type,
+        inline .Union, .Struct => |tf| l: for (tf.fields) |tfield| {
+            if (std.mem.eql(u8, tfield.name, field)) break :l tfield.type;
+        } else unreachable,
+        else => unreachable,
+    };
+}
+
+pub fn ResultFT(comptime spec: type, comptime field: []const u8) type {
+    return FieldType(Result(spec), field);
+}
+
+pub fn ContextType(comptime spec: type) type {
+    return spec.options.context_type;
+}
+
+pub fn Mutator(comptime spec: type) type {
+    return *const fn (std.mem.Allocator, ContextType(spec), *Result(spec), []const u8) noclip.Status(void);
+}
+
+pub fn TrivialConverter(comptime T: type) type {
+    return *const fn () noclip.Status(T);
+}
+
+pub fn SimpleConverter(comptime T: type, comptime alloc: bool) type {
+    return if (alloc)
+        *const fn (std.mem.Allocator, []const u8) noclip.Status(T)
+    else
+        *const fn ([]const u8) noclip.Status(T);
+}
+
+pub fn Converter(comptime spec: type, comptime FType: type) type {
+    const Type = enum {
+        trivial,
+        implicit,
+        simple,
+        context,
+        result,
+        full,
+
+        alloc_simple,
+        alloc_context,
+        alloc_result,
+        alloc_full,
+    };
+
+    return union(Type) {
+        trivial: TrivialConverter(FType),
+        simple: SimpleConverter(FType, false),
+        context: *const fn (ContextType(spec), []const u8) noclip.Status(FType),
+        result: *const fn (*const Result(spec), []const u8) noclip.Status(FType),
+        full: *const fn (ContextType(spec), *const Result(spec), []const u8) noclip.Status(FType),
+
+        alloc_simple: SimpleConverter(FType, true),
+        alloc_context: *const fn (std.mem.Allocator, ContextType(spec), []const u8) noclip.Status(FType),
+        alloc_result: *const fn (std.mem.Allocator, *const Result(spec), []const u8) noclip.Status(FType),
+        alloc_full: *const fn (std.mem.Allocator, ContextType(spec), *const Result(spec), []const u8) noclip.Status(FType),
+
+        pub fn wrap(function: anytype) @This() {
+            const t: Type = comptime blk: {
+                const FuncType: type = switch (@typeInfo(@TypeOf(function))) {
+                    .pointer => |ptr| ptr.child,
+                    .@"fn" => @TypeOf(function),
+                    else => unreachable,
+                };
+
+                for (std.meta.fields(Type)) |tf| {
+                    if (@typeInfo(FieldType(@This(), tf.name)).pointer.child == FuncType)
+                        break :blk @field(Type, tf.name);
+                } else unreachable;
+            };
+
+            return @unionInit(@This(), @tagName(t), function);
+        }
+
+        pub fn invoke(
+            self: @This(),
+            alloc: std.mem.Allocator,
+            context: ContextType(spec),
+            res: *const Result(spec),
+            rawvalue: []const u8,
+        ) noclip.Status(FType) {
+            return switch (self) {
+                .trivial => |call| call(),
+                .simple => |call| call(rawvalue),
+                .context => |call| call(context, rawvalue),
+                .result => |call| call(res, rawvalue),
+                .full => |call| call(context, res, rawvalue),
+
+                .alloc_simple => |call| call(alloc, rawvalue),
+                .alloc_context => |call| call(alloc, context, rawvalue),
+                .alloc_result => |call| call(alloc, res, rawvalue),
+                .alloc_full => |call| call(alloc, context, res, rawvalue),
+            };
+        }
+    };
+}
+
+pub fn defaultConverter(comptime spec: type, comptime FType: type) Converter(spec, FType) {
+    if (FType == noclip.String) {
+        return convertString;
     }
+    return switch (@typeInfo(FType)) {
+        .int => Converter(spec, FType).wrap(convertInt(FType, 0)),
+        .@"enum" => Converter(spec, FType).wrap(convertEnum(FType)),
+    };
+}
 
-    pub fn parse(self: @This(), name: []const u8, args: [][:0]u8, env: std.process.EnvMap) anyerror!?ParseResult {
-        return try self.methods.parse(self.parser, self.context, name, args, env);
-    }
-
-    pub fn finish(self: @This()) anyerror!?ParserInterface {
-        return try self.methods.finish(self.parser, self.context);
-    }
-
-    pub fn getParseError(self: @This()) []const u8 {
-        return self.methods.getParseError(self.parser);
-    }
-
-    pub fn addSubcommand(self: @This(), name: []const u8, subcommand: ParserInterface) std.mem.Allocator.Error!void {
-        return try self.methods.addSubcommand(self.parser, name, subcommand);
-    }
-
-    pub fn getSubcommand(self: @This(), name: []const u8) ?ParserInterface {
-        return self.methods.getSubcommand(self.parser, name);
-    }
-
-    pub fn describe(self: @This()) []const u8 {
-        return self.methods.describe();
-    }
-
-    pub fn deinit(self: @This()) void {
-        self.methods.deinit(self.parser);
-    }
-
-    pub fn deinitTree(self: @This()) void {
-        self.methods.deinitTree(self.parser);
-    }
-};
-
-pub const CommandMap = std.StringArrayHashMap(ParserInterface);
-const ParseResult = struct { name: []const u8, args: [][:0]u8, parser: ParserInterface };
-
-// the parser is generated by the bind method of the CommandBuilder, so we can
-// be extremely type-sloppy here, which simplifies the signature.
-pub fn Parser(comptime command: anytype, comptime callback: anytype) type {
-    const UserContext = @TypeOf(command).UserContextType;
-    const parameters = command.generate();
-    const Intermediate = command.Intermediate();
-    const Output = command.Output();
-
+fn defaultMutator(
+    comptime spec: type,
+    comptime field: []const u8,
+) Mutator(spec) {
+    const converter = defaultConverter(spec, ResultFT(spec, field));
     return struct {
-        const command_description = command.description;
-
-        intermediate: Intermediate = .{},
-        output: Output = undefined,
-        consumed_args: u32 = 0,
-        progname: ?[]const u8 = null,
-        has_global_tags: bool = false,
-        arena: *std.heap.ArenaAllocator,
-        allocator: std.mem.Allocator,
-        subcommands: CommandMap,
-        subcommand: ?ParserInterface = null,
-        error_message: std.ArrayListUnmanaged(u8) = .{},
-        help_builder: help.HelpBuilder(command),
-
-        // This is a slightly annoying hack to work around the fact that there's no way
-        // to provide a method signature conditionally.
-        pub usingnamespace InterfaceGen(@This(), @TypeOf(command).ICC);
-        // This is attached to the struct this way because these are all "private"
-        // methods that exist exclusively to cast the type-erased interface object back
-        // into something usable. Their implementations aren't meaningful and just
-        // cognitively clutter this struct.
-        pub usingnamespace InterfaceWrappers(@This());
-
-        pub fn execute(self: *@This(), context: UserContext) anyerror!void {
-            const args = std.process.argsAlloc(self.allocator) catch |err| {
-                try self.error_message.appendSlice(
-                    self.allocator,
-                    "Failed to allocate process arg vector\n",
-                );
-                return err;
-            };
-            const env = std.process.getEnvMap(self.allocator) catch |err| {
-                try self.error_message.appendSlice(
-                    self.allocator,
-                    "Failed to allocate process environment variable map\n",
-                );
-                return err;
-            };
-
-            if (args.len < 1) {
-                try self.error_message.appendSlice(
-                    self.allocator,
-                    "The argument list for the base CLI entry point is empty.\n",
-                );
-                return ParseError.EmptyArgs;
+        fn mut(alloc: std.mem.Allocator, ctx: ContextType(spec), res: *Result(spec), rawvalue: []const u8) noclip.Status(void) {
+            switch (converter.invoke(alloc, ctx, res, rawvalue)) {
+                .success => |val| @field(res, field) = val,
+                .failure => |val| return .{ .failure = val },
             }
-
-            self.progname = std.fs.path.basename(args[0]);
-
-            {
-                var subc = try self.subparse(context, self.progname.?, args[1..], env);
-                while (subc) |next| {
-                    subc = next.parser.parse(next.name, next.args, env) catch |err| {
-                        try self.error_message.appendSlice(self.allocator, next.parser.getParseError());
-                        return err;
-                    };
-                }
-            }
-            {
-                var subc = try self.finish(context);
-                while (subc) |next| {
-                    subc = next.finish() catch |err| {
-                        try self.error_message.appendSlice(self.allocator, next.getParseError());
-                        return err;
-                    };
-                }
-            }
+            return .success;
         }
+    }.mut;
+}
 
-        pub fn subparse(
-            self: *@This(),
-            context: UserContext,
-            name: []const u8,
-            args: [][:0]u8,
-            env: std.process.EnvMap,
-        ) anyerror!?ParseResult {
-            const sliceto = try self.parse(name, args);
-            try self.readEnvironment(env);
-            try self.convertEager(context);
-
-            if (self.subcommand) |subcommand| {
-                const grafted_name = try std.mem.join(
-                    self.allocator,
-                    " ",
-                    &.{ name, args[sliceto - 1] },
-                );
-                return .{ .name = grafted_name, .args = args[sliceto..], .parser = subcommand };
-            } else if (self.subcommands.count() > 0 and command.subcommand_required) {
-                const stderr = std.io.getStdErr().writer();
-                try stderr.print("'{s}' requires a subcommand.\n\n", .{name});
-
-                self.printHelp(name);
-            }
-
-            return null;
-        }
-
-        pub fn finish(self: *@This(), context: UserContext) anyerror!?ParserInterface {
-            try self.convert(context);
-            try callback(context, self.output);
-            return self.subcommand;
-        }
-
-        pub fn getParseError(self: @This()) []const u8 {
-            return if (self.error_message.items.len == 0)
-                "An unexpected error occurred.\n"
-            else
-                self.error_message.items;
-        }
-
-        pub fn deinit(self: @This()) void {
-            self.arena.deinit();
-            self.arena.child_allocator.destroy(self.arena);
-        }
-
-        pub fn deinitTree(self: @This()) void {
-            for (self.subcommands.values()) |subcommand| {
-                subcommand.deinitTree();
-            }
-            self.deinit();
-        }
-
-        pub fn addSubcommand(self: *@This(), name: []const u8, parser: ParserInterface) !void {
-            try self.subcommands.put(name, parser);
-        }
-
-        pub fn getSubcommand(self: @This(), name: []const u8) ?ParserInterface {
-            return self.subcommands.get(name);
-        }
-
-        fn printValue(self: @This(), value: anytype, comptime indent: []const u8) void {
-            if (comptime @hasField(@TypeOf(value), "items")) {
-                std.debug.print("{s}[\n", .{indent});
-                for (value.items) |item| {
-                    self.printValue(item, indent ++ "   ");
-                }
-                std.debug.print("{s}]\n", .{indent});
-            } else {
-                std.debug.print("{s}{s}\n", .{ indent, value });
-            }
-        }
-
-        pub fn parse(
-            self: *@This(),
-            name: []const u8,
-            args: [][:0]u8,
-        ) anyerror!usize {
-            // run pre-parse pass if we have any global parameters
-            // try self.preparse()
-
-            var forced_ordinal = false;
-            var argit = ncmeta.SliceIterator(@TypeOf(args)).wrap(args);
-
-            // there are a LOT of different parsing strategies that can be adopted to
-            // handle "incorrect" command lines. For example, a --long-style named
-            // argument could be parsed as an ordered argument if it doesn't match any
-            // of the specified tag names. However, if the user has not passed `--`
-            // then it's more likely the erroneous flag is a typo or some other
-            // erroneous input and should be treated as such. Similarly, handling the
-            // pair `--long-style --some-value`. if long_style takes one value,
-            // should --some-value be treated as the value, or should we assume the
-            // user forgot the value and is specifying a second tag? Getting too clever
-            // with context (e.g. checking if --some-value is a known tag name)
-            // probably also violates the principle of least astonishment, as if it
-            // doesn't match, it could very likely be a typo or other erroneous input.
-            // In this case we have an out, sort of, as --long-style=--some-value is
-            // unambiguous in purpose. However, this approach misses for short flags,
-            // unless we also support a -l=--some-value syntax, which I don't like and
-            // don't think is a common convention. In this case, I think it is
-            // reasonable to consume the value without getting fancy,
-            // e.g. -l --some-value produces 'long_style: "--some-value"'. Odds are, if
-            // the command line was specified incorrectly, the error will cascade
-            // through somewhere.
-
-            // another consideration is how to deal with mixed --named and positional
-            // arguments. Theoretically, fixed quantity positional arguments can be
-            // unambiguously interspersed with named arguments, but that feels sloppy.
-            // If a positional argument needs to start with --, we have the -- argument
-            // to force positional parsing.
-
-            argloop: while (argit.next()) |arg| {
-                if (!forced_ordinal and std.mem.eql(u8, arg, "--")) {
-                    forced_ordinal = true;
-                    continue :argloop;
-                }
-
-                if (!forced_ordinal and arg.len > 1 and arg[0] == '-') {
-                    if (arg.len > 2 and arg[1] == '-') {
-                        try self.parseLongTag(name, arg, &argit);
-                        continue :argloop;
-                    } else if (arg.len > 1) {
-                        for (arg[1..], 1..) |short, idx| {
-                            try self.parseShortTag(name, short, arg.len - idx - 1, &argit);
-                        }
-                        continue :argloop;
-                    }
-
-                    // if we've fallen through to here then we will be parsing ordinals
-                    // exclusively from here on out.
-                    forced_ordinal = true;
-                }
-
-                if (try self.parseOrdinals(arg, &argit)) |subcommand| {
-                    self.subcommand = subcommand;
-                    // TODO: return slice of remaining or offset index
-                    return argit.index;
-                }
-            }
-
-            return 0;
-        }
-
-        fn parseLongTag(
-            self: *@This(),
-            name: []const u8,
-            arg: [:0]u8,
-            argit: *ncmeta.SliceIterator([][:0]u8),
-        ) ParseError!void {
-            if (comptime command.help_flag.long_tag) |long|
-                if (std.mem.eql(u8, arg, long))
-                    self.printHelp(name);
-
-            inline for (comptime parameters) |param| {
-                const PType = @TypeOf(param);
-                // removing the comptime here causes the compiler to die
-                comptime if (PType.param_type != .Nominal or param.long_tag == null) continue;
-                const tag = param.long_tag.?;
-
-                if (std.mem.startsWith(u8, arg, tag)) match: {
-                    if (arg.len == tag.len) {
-                        try self.applyParamValues(param, argit, false);
-                    } else if (arg[tag.len] == '=') {
-                        try self.applyFusedValues(param, arg[tag.len + 1 ..]);
-                    } else break :match;
-
-                    return;
-                }
-            }
-
-            try self.error_message.writer(self.allocator).print(
-                "Could not parse command line: unknown option \"{s}\"\n",
-                .{arg},
-            );
-            return ParseError.UnknownLongTagParameter;
-        }
-
-        fn parseShortTag(
-            self: *@This(),
-            name: []const u8,
-            arg: u8,
-            remaining: usize,
-            argit: *ncmeta.SliceIterator([][:0]u8),
-        ) ParseError!void {
-            if (comptime command.help_flag.short_tag) |short|
-                if (arg == short[1])
-                    self.printHelp(name);
-
-            inline for (comptime parameters) |param| {
-                const PType = @TypeOf(param);
-                // removing the comptime here causes the compiler to die
-                comptime if (PType.param_type != .Nominal or param.short_tag == null) continue;
-                const tag = param.short_tag.?;
-
-                if (arg == tag[1]) {
-                    if (comptime !PType.is_flag)
-                        if (remaining > 0) {
-                            try self.error_message.writer(self.allocator).print(
-                                "Could not parse command line: \"-{c}\" is fused to another flag, but it requires a value\n",
-                                .{arg},
-                            );
-                            return ParseError.FusedShortTagValueMissing;
-                        };
-
-                    try self.applyParamValues(param, argit, false);
-                    return;
-                }
-            }
-
-            try self.error_message.writer(self.allocator).print(
-                "Could not parse command line: unknown option \"-{c}\"\n",
-                .{arg},
-            );
-            return ParseError.UnknownShortTagParameter;
-        }
-
-        fn parseOrdinals(
-            self: *@This(),
-            arg: [:0]u8,
-            argit: *ncmeta.SliceIterator([][:0]u8),
-        ) ParseError!?ParserInterface {
-            comptime var arg_index: u32 = 0;
-            inline for (comptime parameters) |param| {
-                comptime if (@TypeOf(param).param_type != .Ordinal) continue;
-
-                if (self.consumed_args == arg_index) {
-                    argit.rewind();
-                    if (comptime @TypeOf(param).G.multi) {
-                        while (argit.peek()) |_| try self.applyParamValues(param, argit, false);
-                    } else {
-                        try self.applyParamValues(param, argit, false);
-                    }
-                    self.consumed_args += 1;
-                    return null;
-                }
-
-                arg_index += 1;
-            }
-
-            return self.subcommands.get(arg) orelse {
-                const writer = self.error_message.writer(self.allocator);
-                if (self.subcommands.count() > 0)
-                    try writer.print(
-                        "Could not parse command line: unknown subcommand \"{s}\"\n",
-                        .{arg},
-                    )
-                else
-                    try writer.print(
-                        "Could not parse command line: unexpected extra argument \"{s}\"\n",
-                        .{arg},
-                    );
-                return ParseError.ExtraValue;
-            };
-        }
-
-        fn pushIntermediateValue(
-            self: *@This(),
-            comptime param: anytype,
-            // @TypeOf(param).G.IntermediateValue() should work but appears to trigger a
-            //  compiler bug: expected pointer, found 'u1'
-            value: param.IntermediateValue(),
-        ) ParseError!void {
-            const gen = @TypeOf(param).G;
-            if (comptime gen.multi) {
-                if (@field(self.intermediate, param.name) == null) {
-                    @field(self.intermediate, param.name) = gen.IntermediateType().init(self.allocator);
-                }
-                try @field(self.intermediate, param.name).?.append(value);
-            } else if (comptime @TypeOf(param).G.nonscalar()) {
-                if (@field(self.intermediate, param.name)) |list| list.deinit();
-                @field(self.intermediate, param.name) = value;
-            } else {
-                @field(self.intermediate, param.name) = value;
-            }
-        }
-
-        fn applyParamValues(
-            self: *@This(),
-            comptime param: anytype,
-            argit: anytype,
-            bounded: bool,
-        ) ParseError!void {
-            switch (comptime @TypeOf(param).G.value_count) {
-                .flag => try self.pushIntermediateValue(param, comptime param.flag_bias.string()),
-                .count => @field(self.intermediate, param.name) += 1,
-                .fixed => |count| switch (count) {
-                    0 => {
-                        const writer = self.error_message.writer(self.allocator);
-                        const desc = try param.describe(self.allocator);
-                        defer self.allocator.free(desc);
-                        try writer.print(
-                            "Could not parse command line: {s} takes no value.\n",
-                            .{desc},
-                        );
-                        return ParseError.ExtraValue;
-                    },
-                    1 => try self.pushIntermediateValue(param, argit.next() orelse {
-                        const writer = self.error_message.writer(self.allocator);
-                        const desc = try param.describe(self.allocator);
-                        defer self.allocator.free(desc);
-                        try writer.print(
-                            "Could not parse command line: {s} requires a value.\n",
-                            .{desc},
-                        );
-                        return ParseError.MissingValue;
-                    }),
-                    else => |total| {
-                        var list = try std.ArrayList([:0]const u8).initCapacity(self.allocator, total);
-
-                        var consumed: u32 = 0;
-                        while (consumed < total) : (consumed += 1) {
-                            const next = argit.next() orelse {
-                                const writer = self.error_message.writer(self.allocator);
-                                const desc = try param.describe(self.allocator);
-                                defer self.allocator.free(desc);
-                                try writer.print(
-                                    "Could not parse command line: {s} is missing one or more values (need {d}, got {d}).\n",
-                                    .{ desc, total, consumed },
-                                );
-                                return ParseError.MissingValue;
-                            };
-
-                            list.appendAssumeCapacity(next);
-                        }
-                        if (bounded and argit.next() != null) {
-                            const writer = self.error_message.writer(self.allocator);
-                            const desc = try param.describe(self.allocator);
-                            defer self.allocator.free(desc);
-                            try writer.print(
-                                "Could not parse command line: {s} has too many values (need {d}).\n",
-                                .{ desc, total },
-                            );
-                            return ParseError.ExtraValue;
-                        }
-
-                        try self.pushIntermediateValue(param, list);
-                    },
-                },
-            }
-        }
-
-        fn applyFusedValues(
-            self: *@This(),
-            comptime param: anytype,
-            value: [:0]u8,
-        ) ParseError!void {
-            var iter = ncmeta.MutatingZSplitter(u8){ .buffer = value, .delimiter = ',' };
-            return try self.applyParamValues(param, &iter, true);
-        }
-
-        fn readEnvironment(self: *@This(), env: std.process.EnvMap) !void {
-            inline for (comptime parameters) |param| {
-                if (comptime param.env_var) |env_var| blk: {
-                    if (@field(self.intermediate, param.name) != null) break :blk;
-
-                    const val = try self.allocator.dupeZ(u8, env.get(env_var) orelse break :blk);
-
-                    if (comptime @TypeOf(param).G.value_count == .flag) {
-                        try self.pushIntermediateValue(param, val);
-                    } else {
-                        try self.applyFusedValues(param, val);
-                    }
-                }
-            }
-        }
-
-        fn convertEager(self: *@This(), context: UserContext) NoclipError!void {
-            inline for (comptime parameters) |param| {
-                if (comptime param.eager) {
-                    try self.convertParam(param, context);
-                }
-            }
-        }
-
-        fn convert(self: *@This(), context: UserContext) NoclipError!void {
-            inline for (comptime parameters) |param| {
-                if (comptime !param.eager) {
-                    try self.convertParam(param, context);
-                }
-            }
-        }
-
-        fn convertParam(self: *@This(), comptime param: anytype, context: UserContext) NoclipError!void {
-            if (@field(self.intermediate, param.name)) |intermediate| {
-                var buffer = std.ArrayList(u8).init(self.allocator);
-                const writer = buffer.writer();
-
-                if (comptime @TypeOf(param).has_output) {
-                    @field(self.output, param.name) = param.converter(context, intermediate, writer) catch |err| {
-                        const err_writer = self.error_message.writer(self.allocator);
-                        const desc = try param.describe(self.allocator);
-                        defer self.allocator.free(desc);
-                        try err_writer.print("Error parsing option {s}: {s}\n", .{ desc, buffer.items });
-                        return err;
-                    };
-                } else {
-                    param.converter(context, intermediate, writer) catch |err| {
-                        const err_writer = self.error_message.writer(self.allocator);
-                        const desc = try param.describe(self.allocator);
-                        defer self.allocator.free(desc);
-                        try err_writer.print("Error parsing option {s}: {s}\n", .{ desc, buffer.items });
-                        return err;
-                    };
-                }
-            } else {
-                if (comptime param.required) {
-                    const err_writer = self.error_message.writer(self.allocator);
-                    const desc = try param.describe(self.allocator);
-                    defer self.allocator.free(desc);
-                    try err_writer.print("Could not parse command line: required parameter {s} is missing\n", .{desc});
-                    return ParseError.RequiredParameterMissing;
-                } else if (comptime @TypeOf(param).has_output) {
-                    if (comptime param.default) |def| {
-                        // this has to be explicitly set because even though we set it as
-                        // the field default, it gets clobbered because self.output is
-                        // initialized as undefined.
-                        @field(self.output, param.name) = def;
-                    } else {
-                        @field(self.output, param.name) = null;
-                        return;
-                    }
-                }
-            }
-        }
-
-        fn printHelp(self: *@This(), name: []const u8) noreturn {
-            defer std.process.exit(0);
-
-            const stderr = std.io.getStdErr().writer();
-            if (self.help_builder.buildMessage(name, self.subcommands)) |message|
-                stderr.writeAll(message) catch return
+pub fn convertInt(comptime T: type, base: u8) SimpleConverter(T, true) {
+    return struct {
+        fn conv(alloc: std.mem.Allocator, input: []const u8) noclip.Status(T) {
+            return if (std.fmt.parseInt(FieldType, input, base)) |res|
+                .{ .success = res }
             else |_|
-                stderr.writeAll("There was a problem generating the help.") catch return;
+                .{ .failure = .{
+                    .message = std.fmt.allocPrint(
+                        alloc,
+                        "could not parse {s} as an integer",
+                        .{input},
+                    ) catch "out of memory",
+                } };
         }
-    };
+    }.conv;
 }
 
-fn InterfaceWrappers(comptime ParserType: type) type {
+pub fn convertEnum(comptime T: type) SimpleConverter(T, true) {
     return struct {
-        inline fn castInterfaceParser(parser: *anyopaque) *ParserType {
-            return @ptrCast(@alignCast(parser));
+        fn conv(alloc: std.mem.Allocator, input: []const u8) noclip.Status(T) {
+            return if (std.meta.stringToEnum(T, input)) |val|
+                .{ .success = val }
+            else
+                .{
+                    .failure = .{ .message = std.fmt.allocPrint(
+                        alloc,
+                        "`{s}` is not a member of {s}",
+                        .{ input, @typeName(T) } catch "out of memory",
+                    ) },
+                };
         }
-
-        fn _wrapExecute(parser: *anyopaque, ctx: *anyopaque) anyerror!void {
-            const self = castInterfaceParser(parser);
-
-            const context = self.castContext(ctx);
-            return try self.execute(context);
-        }
-
-        fn _wrapParse(
-            parser: *anyopaque,
-            ctx: *anyopaque,
-            name: []const u8,
-            args: [][:0]u8,
-            env: std.process.EnvMap,
-        ) anyerror!?ParseResult {
-            const self = castInterfaceParser(parser);
-            const context = self.castContext(ctx);
-            return try self.subparse(context, name, args, env);
-        }
-
-        fn _wrapFinish(parser: *anyopaque, ctx: *anyopaque) anyerror!?ParserInterface {
-            const self = castInterfaceParser(parser);
-            const context = self.castContext(ctx);
-            return try self.finish(context);
-        }
-
-        fn _wrapGetParseError(parser: *anyopaque) []const u8 {
-            const self = castInterfaceParser(parser);
-            return self.getParseError();
-        }
-
-        fn _wrapAddSubcommand(parser: *anyopaque, name: []const u8, subcommand: ParserInterface) !void {
-            const self = castInterfaceParser(parser);
-            return self.addSubcommand(name, subcommand);
-        }
-
-        fn _wrapGetSubcommand(parser: *anyopaque, name: []const u8) ?ParserInterface {
-            const self = castInterfaceParser(parser);
-            return self.getSubcommand(name);
-        }
-
-        fn _wrapDeinit(parser: *anyopaque) void {
-            const self = castInterfaceParser(parser);
-            self.deinit();
-        }
-
-        fn _wrapDeinitTree(parser: *anyopaque) void {
-            const self = castInterfaceParser(parser);
-            self.deinitTree();
-        }
-
-        fn _wrapDescribe() []const u8 {
-            return ParserType.command_description;
-        }
-    };
+    }.conv;
 }
 
-// TODO: figure out a better way of consolidating this logic with that in command.zig?
-fn InterfaceGen(comptime ParserType: type, comptime ICC: anytype) type {
-    return switch (ICC) {
-        .empty => struct {
-            pub fn interface(self: *ParserType) ParserInterface {
-                return ParserInterface.create(ParserType, self, @constCast(&void{}));
-            }
-
-            fn castContext(_: ParserType, _: *anyopaque) void {
-                return void{};
-            }
-        },
-        .pointer => struct {
-            pub fn interface(self: *ParserType, context: ICC.InputType().?) ParserInterface {
-                return ParserInterface.create(ParserType, self, @constCast(context));
-            }
-
-            fn castContext(_: ParserType, ctx: *anyopaque) ICC.OutputType() {
-                return @ptrCast(@alignCast(ctx));
-            }
-        },
-        .value => struct {
-            pub fn interface(self: *ParserType, context: ICC.InputType().?) ParserInterface {
-                return ParserInterface.create(ParserType, self, @ptrCast(@constCast(context)));
-            }
-
-            fn castContext(_: ParserType, ctx: *anyopaque) ICC.OutputType() {
-                return @as(ICC.InputType().?, @ptrCast(@alignCast(ctx))).*;
-            }
-        },
-    };
+pub fn convertString(alloc: std.mem.Allocator, input: []const u8) noclip.Status(noclip.String) {
+    return if (alloc.dupe(input)) |copy|
+        .{ .success = .{ .bytes = copy } }
+    else |_|
+        .{ .failure = .{ .message = "out of memory" } };
 }
+
+fn incrementor(
+    comptime spec: type,
+    comptime field: []const u8,
+    comptime step: ResultFT(spec, field),
+) Mutator(spec) {
+    return struct {
+        fn mut(_: std.mem.Allocator, _: ContextType(spec), res: *Result(spec), _: []const u8) noclip.Status(void) {
+            @field(res, field) += step;
+            return .success;
+        }
+    }.mut;
+}
+
+fn implicitSetter(
+    comptime spec: type,
+    comptime field: []const u8,
+    comptime value: ResultFT(spec, field),
+) Mutator(spec) {
+    return struct {
+        fn mut(_: std.mem.Allocator, _: ContextType(spec), res: *Result(spec), _: []const u8) noclip.Status(void) {
+            @field(res, field) = value;
+            return .success;
+        }
+    }.mut;
+}
+
+fn setter(
+    comptime spec: type,
+    comptime field: []const u8,
+    comptime converter_fn: anytype,
+) Mutator(spec) {
+    const converter = Converter(spec, ResultFT(spec, field)).wrap(converter_fn);
+    return struct {
+        fn mut(alloc: std.mem.Allocator, ctx: ContextType(spec), res: *Result(spec), rawvalue: []const u8) noclip.Status(void) {
+            switch (converter.invoke(alloc, ctx, res, rawvalue)) {
+                .success => |val| @field(res, field) = val,
+                .failure => |val| return .{ .failure = val },
+            }
+            return .success;
+        }
+    }.mut;
+}
+
+const std = @import("std");
+const noclip = @import("./noclip.zig");
