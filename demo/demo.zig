@@ -43,17 +43,25 @@ const Main = struct {
         pub const string: noclip.Option(noclip.String) = .{
             .short = 's',
             .long = "string",
-            .env_var = "NOCLIP_STRING",
+            .env = "NOCLIP_STRING",
             .description = "A string value option",
         };
         pub const default: noclip.Option(u32) = .{
             .name = "default",
+            .description = "default value integer option",
             .short = 'd',
             .long = "default",
-            .env_var = "NOCLIP_DEFAULT",
+            .env = "NOCLIP_DEFAULT",
             .default = 100,
+            // .nice_type_name = "uint",
+        };
+        pub const counter: noclip.Counter(u32) = .{
+            .name = "default",
             .description = "default value integer option",
-            .nice_type_name = "uint",
+            .short = 'd',
+            .long = "default",
+            .env = "NOCLIP_DEFAULT",
+            // .nice_type_name = "uint",
         };
         pub const multi: noclip.Option(noclip.Accumulate(u8)) = .{
             .name = "multi",
@@ -61,7 +69,7 @@ const Main = struct {
             .long_tag = "multi",
             .description = "multiple specification test option",
         };
-        pub const flag: noclip.FlagSet = .{
+        pub const flag: noclip.BoolGroup = .{
             .name = "flag",
             .truthy = .{ .short = 'f', .long = "flag" },
             .falsy = .{ .short = 'F', .long = "no-flag" },
@@ -137,10 +145,10 @@ const Subcommand = struct {
     };
 
     pub const parameters = struct {
-        pub const flag: noclip.Flag = .{
+        pub const flag: noclip.BoolGroup = .{
             .truthy = .{ .short = 'f', .long = "flag" },
             .falsy = .{ .long = "no-flag" },
-            .env_var = "NOCLIP_SUBFLAG",
+            .env = "NOCLIP_SUBFLAG",
         };
         pub const first_arg: noclip.Argument(noclip.String) = .{};
         pub const second_arg: noclip.Argument(noclip.String) = .{

@@ -1,26 +1,10 @@
-fn Short(comptime spec: type) type {
+pub fn Parser(comptime spec: type, comptime root: bool) type {
     return struct {
-        param: noclip.Codepoint,
-        eager: bool,
-        mutator: Mutator(spec),
-    };
-}
-
-fn Long(comptime spec: type) type {
-    return struct {
-        param: []const u8,
-        eager: bool,
-        mutator: Mutator(spec),
-    };
-}
-
-pub fn Parser(comptime spec: type) type {
-    return struct {
-        // this gets heap allocated because it cannot survive being copied
         arena: *std.heap.ArenaAllocator,
         context: ContextType(spec),
         globals: GlobalParams,
         locals: LocalParams,
+        subcommands: Subcommands(spec, root),
 
         pub fn init(alloc: std.mem.Allocator, context: ContextType(spec)) !Self {
             const arena = try alloc.create(std.heap.ArenaAllocator);
@@ -35,13 +19,15 @@ pub fn Parser(comptime spec: type) type {
                 for (@typeInfo(@TypeOf(spec.parameters)).@"struct".decls) |dinf| {
                     const decl = @field(@TypeOf(spec.parameters), dinf.name);
                     switch (@TypeOf(decl).param_type) {
-                        .flag => {
+                        .bool_group => {
                             for (.{ "truthy", "falsy" }, .{ true, false }) |bias, value| {
                                 for (.{ "short", "long" }) |style| {
                                     if (@field(@field(decl, bias), style)) |unw| {
                                         @field(@field(params, @tagName(decl.scope)), style) = @field(@field(params, @tagName(decl.scope)), style) ++ &.{
                                             .{
                                                 .param = unw,
+                                                .eager = decl.eager,
+                                                .takes_value = false,
                                                 .mutator = implicitSetter(spec, dinf.name, value),
                                             },
                                         };
@@ -49,17 +35,37 @@ pub fn Parser(comptime spec: type) type {
                                 }
                             }
                         },
+                        .constant => {
+                            for (.{ "short", "long" }) |style| {
+                                if (@field(decl, style)) |unw| {
+                                    @field(@field(params, @tagName(decl.scope)), style) = @field(@field(params, @tagName(decl.scope)), style) ++ &.{.{
+                                        .param = unw,
+                                        .eager = decl.eager,
+                                        .takes_value = false,
+                                        .mutator = implicitSetter(spec, dinf.name, dinf.value),
+                                    }};
+                                }
+                            }
+                        },
+                        .counter => {},
                         .option => {
                             for (.{ "short", "long" }) |style| {
                                 if (@field(decl, style)) |unw| {
                                     @field(@field(params, @tagName(decl.scope)), style) = @field(@field(params, @tagName(decl.scope)), style) ++ &.{.{
                                         .param = unw,
+                                        .eager = decl.eager,
+                                        .takes_value = true,
                                         .mutator = defaultMutator(spec, dinf.name),
                                     }};
                                 }
                             }
                         },
-                        .argument => {},
+                        .argument => {
+                            params.local.args = params.local.args ++ &.{
+                                defaultMutator(spec, dinf.name),
+                            };
+                        },
+                        .group => {},
                     }
                     break :blk .{ params.global, params.local };
                 }
@@ -79,14 +85,111 @@ pub fn Parser(comptime spec: type) type {
             pa.destroy(self.arena);
         }
 
+        pub fn parse(self: Self, args: []const [:0]const u8, env: std.process.EnvMap) noclip.Status(void) {
+            const alloc = self.arena.allocator();
+            var argt = ArgTraveler.fromSlice(alloc, args) catch return .fail("out of memory");
+            // pre-parse globals. globals can only be named, which simplifies things
+            var result = defaultInit(Result(spec));
+            while (argt.current) |node| : (argt.next()) {
+                const arg = node.data;
+                if (arg.len > 2 and arg[0] == '-' and arg[1] == '-') {
+                    if (self.globals.long.get(arg[2..])) |pctx| {
+                        argt.drop();
+                        const value: [:0]const u8 = if (pctx.takes_value)
+                            argt.popNext()
+                        else
+                            "";
+                        switch (pctx.mutator(alloc, self.context, &result, value)) {}
+                    }
+                } else if (arg.len > 1 and arg[0] == '-') {
+                    const view = std.unicode.Utf8View.init(arg[1..]) catch return .fail("thats not valid utf8");
+                    var iter = view.iterator();
+                    while (iter.nextCodepointSlice()) |seq| {
+                        if (self.globals.short.get(seq)) {
+                            // we have to drop this byte sequence within the fused short params. ugly..................... hrngrk
+                        }
+                    }
+                }
+            }
+            // var parse_mode: enum { mixed, ordered } = .mixed;
+
+            // for (args) |arg| {
+            //     if (arg.len > 2 and arg[0] == '-' and arg[1] == '-') {}
+            //     // if (arg.len > 0 and arg[0] == '-')
+            // }
+        }
+
         const Self = @This();
+
+        const NamedParameter = struct {
+            eager: bool,
+            takes_value: bool,
+            mutator: Mutator(spec),
+        };
+
+        const PMap = std.StaticStringMap(NamedParameter);
+        const ArgList = std.SinglyLinkedList([:0]const u8);
+
+        pub const ArgTraveler = struct {
+            first: ?*Node = null,
+            current: ?*Node = null,
+            prev: ?*Node = null,
+            mem: []const Node,
+
+            pub fn fromSlice(alloc: std.mem.Allocator, slice: []const [:0]const u8) error{OutOfMemory}!ArgTraveler {
+                if (slice.len == 0) return .{ .mem = &.{} };
+
+                const nmem = try alloc.alloc(Node, slice.len);
+                nmem[0] = slice[0];
+                for (slice[1..], nmem[1..], nmem[0 .. nmem.len - 1]) |arg, *current, *prev| {
+                    current.* = .{ .data = arg };
+                    prev.next = current;
+                }
+
+                return .{ .first = &nmem[0], .current = &nmem[0], .mem = nmem };
+            }
+
+            pub fn reset(self: *ArgTraveler) void {
+                self.current = self.first;
+            }
+
+            pub fn next(self: *ArgTraveler) void {
+                self.prev = self.current;
+                if (self.current) |current| {
+                    self.current = current.next;
+                }
+            }
+
+            pub fn drop(self: *ArgTraveler) void {
+                if (self.current == null) return;
+
+                if (self.current == self.first)
+                    self.first = self.current.?.next
+                else if (self.prev) |prev|
+                    prev.next = self.current.?.next;
+            }
+
+            pub fn popNext(self: *ArgTraveler) ?*Node {
+                self.next();
+                defer self.drop();
+                return self.current;
+            }
+
+            pub const Node = struct {
+                data: [:0]const u8,
+                next: ?*Node = null,
+            };
+        };
+
+        // const PMap = std.StringHashMap(NamedParameter);
+
         const GlobalParams = struct {
-            short: []const Short(spec),
-            long: []const Long(spec),
+            short: PMap,
+            long: PMap,
         };
         const LocalParams = struct {
-            short: []const Short(spec),
-            long: []const Long(spec),
+            short: PMap,
+            long: PMap,
             args: []const Mutator(spec),
         };
     };
@@ -104,19 +207,142 @@ pub fn Result(comptime spec: type) type {
         };
 
         for (@typeInfo(@TypeOf(spec.parameters)).@"struct".decls) |df| {
-            const decl = @field(spec.parameters, df.name);
-            const ftype = if (decl.default != null) @TypeOf(decl).Result else ?@TypeOf(decl).Result;
+            const param = @field(spec.parameters, df.name);
+            if (@TypeOf(param).Result == void) continue;
+
+            const FType = ResultFieldType(param);
             out.@"struct".fields = out.@"struct".fields ++ &.{.{
-                .name = df.name,
-                .type = ftype,
-                .default_value = decl.default orelse null,
+                .name = df.name ++ "",
+                .type = FType,
+                .default_value = resultFieldDefault(param),
                 .is_comptime = false,
-                .alignment = @alignOf(ftype),
+                .alignment = @alignOf(FType),
             }};
         }
 
         return @Type(out);
     }
+}
+
+pub fn defaultInit(comptime T: type) T {
+    var result: T = undefined;
+
+    for (@typeInfo(T).Struct.fields) |field| {
+        if (field.default_value) |def| {
+            @field(result, field.name) = @as(*const field.type, @ptrCast(@alignCast(def))).*;
+        } else switch (@typeInfo(field.type)) {
+            .@"struct" => @field(result, field.name) = defaultInit(field.type),
+            else => {},
+        }
+    }
+
+    return result;
+}
+
+pub fn ResultFieldType(comptime param: anytype) type {
+    if (param.mode() == .accumulate) {
+        return param.Type();
+    }
+    if (@typeInfo(param.Type()) == .optional) {
+        return if (param.default != null or param.required)
+            param.Type()
+        else
+            ?param.Type();
+    } else @compileError("you stepped in it now");
+}
+
+pub fn resultFieldDefault(comptime param: anytype) ?*anyopaque {
+    if (param.mode() == .accumulate) {
+        return &param.default;
+    }
+    if (@typeInfo(param.Type()) == .optional) {
+        return if (param.default) |def|
+            &@as(param.Type(), def)
+        else
+            null;
+    } else @compileError("doom");
+}
+
+pub fn Subcommands(comptime spec: type, comptime root: bool) type {
+    comptime {
+        if (!@hasDecl(spec, "subcommands")) return void;
+        const decls = @typeInfo(@TypeOf(spec.subcommands)).@"struct".decls;
+        if (decls.len == 0) return void;
+
+        var out: std.builtin.Type = .{
+            .@"struct" = .{
+                .layout = .auto,
+                .fields = &.{},
+                .decls = &.{},
+                .is_tuple = false,
+            },
+        };
+
+        for (decls) |dinf| {
+            const decl = @field(@TypeOf(spec.subcommands), dinf.name);
+            const FType = Parser(decl, false);
+            out.@"struct".fields = out.@"struct".fields ++ &.{.{
+                .name = dinf.name + "",
+                .type = FType,
+                .default_value = null,
+                .is_comptime = false,
+                .alignment = @alignOf(FType),
+            }};
+        }
+        if (root) {
+            // help: switch (spec.options.create_help_command) {
+            switch (spec.options.create_help_command) {
+                // .if_subcommands => if (out.@"struct".fields.len > 0) continue :help .always,
+                .if_subcommands,
+                .always,
+                => {
+                    const FType = Parser(HelpCommand(spec), false);
+                    out.@"struct".fields = out.@"struct".fields ++ &.{.{
+                        .name = "help",
+                        .type = FType,
+                        .default_value = null,
+                        .is_comptime = false,
+                        .alignment = @alignOf(FType),
+                    }};
+                },
+                .never => {},
+            }
+            if (spec.options.create_completion_helper) {}
+        }
+
+        return @Type(out);
+    }
+}
+
+pub fn HelpCommand(comptime rootspec: type) type {
+    return struct {
+        pub const description =
+            \\Get detailed help for a subcommand
+        ;
+        pub const options: noclip.CommandOptions = .{};
+        pub const parameters = struct {
+            command_path: noclip.Argument(noclip.Aggregate(noclip.String)) = .{
+                .description =
+                \\The name of the subcommand to print help for. Nested subcommands
+                \\can be requested as well.
+                ,
+            },
+        };
+
+        pub fn run(args: Result(@This())) void {
+            HelpGenerator(rootspec).lookupHelp(args.command_path);
+        }
+    };
+}
+
+pub fn HelpGenerator(comptime rootspec: type) type {
+    return struct {
+        pub fn lookupHelp(command_path: []const noclip.String) void {
+            _ = rootspec;
+            _ = command_path;
+            std.debug.print("This is a stub\n", .{});
+        }
+    };
 }
 
 pub fn FieldType(comptime T: type, comptime field: []const u8) type {
@@ -250,15 +476,15 @@ pub fn convertInt(comptime T: type, base: u8) SimpleConverter(T, true) {
     return struct {
         fn conv(alloc: std.mem.Allocator, input: []const u8) noclip.Status(T) {
             return if (std.fmt.parseInt(FieldType, input, base)) |res|
-                .{ .success = res }
+                .succeed(res)
             else |_|
-                .{ .failure = .{
-                    .message = std.fmt.allocPrint(
+                .fail(
+                    std.fmt.allocPrint(
                         alloc,
                         "could not parse {s} as an integer",
                         .{input},
                     ) catch "out of memory",
-                } };
+                );
         }
     }.conv;
 }
@@ -267,24 +493,24 @@ pub fn convertEnum(comptime T: type) SimpleConverter(T, true) {
     return struct {
         fn conv(alloc: std.mem.Allocator, input: []const u8) noclip.Status(T) {
             return if (std.meta.stringToEnum(T, input)) |val|
-                .{ .success = val }
+                .succeed(val)
             else
-                .{
-                    .failure = .{ .message = std.fmt.allocPrint(
+                .fail(
+                    std.fmt.allocPrint(
                         alloc,
                         "`{s}` is not a member of {s}",
-                        .{ input, @typeName(T) } catch "out of memory",
-                    ) },
-                };
+                        .{ input, @typeName(T) },
+                    ) catch "out of memory",
+                );
         }
     }.conv;
 }
 
 pub fn convertString(alloc: std.mem.Allocator, input: []const u8) noclip.Status(noclip.String) {
     return if (alloc.dupe(input)) |copy|
-        .{ .success = .{ .bytes = copy } }
+        .succeed(.{ .bytes = copy })
     else |_|
-        .{ .failure = .{ .message = "out of memory" } };
+        .fail("out of memory");
 }
 
 fn incrementor(
@@ -294,7 +520,7 @@ fn incrementor(
 ) Mutator(spec) {
     return struct {
         fn mut(_: std.mem.Allocator, _: ContextType(spec), res: *Result(spec), _: []const u8) noclip.Status(void) {
-            @field(res, field) += step;
+            @field(res, field) +|= step;
             return .success;
         }
     }.mut;
