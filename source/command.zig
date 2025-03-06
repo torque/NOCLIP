@@ -118,8 +118,8 @@ pub const InterfaceContextCategory = union(enum) {
 
     pub fn fromType(comptime ContextType: type) InterfaceContextCategory {
         return switch (@typeInfo(ContextType)) {
-            .Void => .empty,
-            .Pointer => |info| if (info.size == .Slice) .{ .value = ContextType } else .{ .pointer = ContextType },
+            .void => .empty,
+            .pointer => |info| if (info.size == .slice) .{ .value = ContextType } else .{ .pointer = ContextType },
             // technically, i0, u0, and struct{} should be treated as empty, probably
             else => .{ .value = ContextType },
         };
@@ -172,7 +172,8 @@ pub fn CommandBuilder(comptime UserContext: type) type {
             };
         }
 
-        pub usingnamespace InterfaceCreator(@This());
+        pub const ifc = InterfaceCreator(@This());
+        pub const createInterface = ifc.createInterface;
 
         fn _createInterfaceImpl(
             comptime self: @This(),
@@ -376,7 +377,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                             // [:0]const u8.
                             .name = short ++ "",
                             .type = void,
-                            .default_value = null,
+                            .default_value_ptr = null,
                             .is_comptime = false,
                             .alignment = 0,
                         }};
@@ -385,7 +386,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                         tag_fields = tag_fields ++ &[_]StructField{.{
                             .name = long ++ "",
                             .type = void,
-                            .default_value = null,
+                            .default_value_ptr = null,
                             .is_comptime = false,
                             .alignment = 0,
                         }};
@@ -394,7 +395,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                         env_var_fields = env_var_fields ++ &[_]StructField{.{
                             .name = env_var ++ "",
                             .type = void,
-                            .default_value = null,
+                            .default_value_ptr = null,
                             .is_comptime = false,
                             .alignment = 0,
                         }};
@@ -439,27 +440,27 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     fields = fields ++ &[_]StructField{.{
                         .name = param.name ++ "",
                         .type = FieldType,
-                        .default_value = @ptrCast(default),
+                        .default_value_ptr = @ptrCast(default),
                         .is_comptime = false,
                         .alignment = @alignOf(FieldType),
                     }};
                 }
 
-                _ = @Type(.{ .Struct = .{
+                _ = @Type(.{ .@"struct" = .{
                     .layout = .auto,
                     .fields = tag_fields,
                     .decls = &.{},
                     .is_tuple = false,
                 } });
 
-                _ = @Type(.{ .Struct = .{
+                _ = @Type(.{ .@"struct" = .{
                     .layout = .auto,
                     .fields = env_var_fields,
                     .decls = &.{},
                     .is_tuple = false,
                 } });
 
-                return @Type(.{ .Struct = .{
+                return @Type(.{ .@"struct" = .{
                     .layout = .auto,
                     .fields = fields,
                     .decls = &.{},
@@ -509,7 +510,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     fields = &(@as([fields.len]StructField, fields[0..fields.len].*) ++ [1]StructField{.{
                         .name = param.name ++ "",
                         .type = FieldType,
-                        .default_value = @ptrCast(&@as(
+                        .default_value_ptr = @ptrCast(&@as(
                             FieldType,
                             if (PType.value_count == .count) 0 else null,
                         )),
@@ -518,7 +519,7 @@ pub fn CommandBuilder(comptime UserContext: type) type {
                     }});
                 }
 
-                return @Type(.{ .Struct = .{
+                return @Type(.{ .@"struct" = .{
                     .layout = .auto,
                     .fields = fields,
                     .decls = &.{},

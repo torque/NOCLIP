@@ -10,7 +10,7 @@ pub fn UpdateDefaults(comptime input: type, comptime defaults: anytype) type {
     comptime {
         const inputInfo = @typeInfo(input);
         const fieldcount = switch (inputInfo) {
-            .Struct => |spec| blk: {
+            .@"struct" => |spec| blk: {
                 if (spec.decls.len > 0) {
                     @compileError("UpdateDefaults only works on structs " ++
                         "without decls due to limitations in @Type.");
@@ -21,7 +21,7 @@ pub fn UpdateDefaults(comptime input: type, comptime defaults: anytype) type {
         };
 
         var fields: [fieldcount]StructField = undefined;
-        for (inputInfo.Struct.fields, 0..) |field, idx| {
+        for (inputInfo.@"struct".fields, 0..) |field, idx| {
             fields[idx] = .{
                 .name = field.name,
                 .field_type = field.field_type,
@@ -29,27 +29,27 @@ pub fn UpdateDefaults(comptime input: type, comptime defaults: anytype) type {
                 // setting null defaults work, and it converts comptime_int to
                 // the appropriate type, which is nice for ergonomics. Not sure
                 // if it introduces weird edge cases. Probably it's fine?
-                .default_value = if (@hasField(@TypeOf(defaults), field.name))
+                .default_value_ptr = if (@hasField(@TypeOf(defaults), field.name))
                     @ptrCast(&@as(field.field_type, @field(defaults, field.name)))
                 else
-                    field.default_value,
+                    field.default_value_ptr,
                 .is_comptime = field.is_comptime,
                 .alignment = field.alignment,
             };
         }
 
-        return @Type(.{ .Struct = .{
-            .layout = inputInfo.Struct.layout,
-            .backing_integer = inputInfo.Struct.backing_integer,
+        return @Type(.{ .@"struct" = .{
+            .layout = inputInfo.@"struct".layout,
+            .backing_integer = inputInfo.@"struct".backing_integer,
             .fields = &fields,
-            .decls = inputInfo.Struct.decls,
-            .is_tuple = inputInfo.Struct.is_tuple,
+            .decls = inputInfo.@"struct".decls,
+            .is_tuple = inputInfo.@"struct".is_tuple,
         } });
     }
 }
 
 pub fn enumLength(comptime T: type) comptime_int {
-    return @typeInfo(T).Enum.fields.len;
+    return @typeInfo(T).@"enum".fields.len;
 }
 
 pub fn partition(comptime T: type, input: []const T, wedge: []const []const T) [3][]const T {
@@ -210,11 +210,11 @@ pub fn MutatingZSplitter(comptime T: type) type {
 pub fn copyStruct(comptime T: type, source: T, field_overrides: anytype) T {
     var result: T = undefined;
 
-    comptime for (@typeInfo(@TypeOf(field_overrides)).Struct.fields) |field| {
+    comptime for (@typeInfo(@TypeOf(field_overrides)).@"struct".fields) |field| {
         if (!@hasField(T, field.name)) @compileError("override contains bad field" ++ field);
     };
 
-    inline for (comptime @typeInfo(T).Struct.fields) |field| {
+    inline for (comptime @typeInfo(T).@"struct".fields) |field| {
         if (comptime @hasField(@TypeOf(field_overrides), field.name))
             @field(result, field.name) = @field(field_overrides, field.name)
         else
@@ -257,14 +257,14 @@ pub const TupleBuilder = struct {
                 fields[idx] = .{
                     .name = std.fmt.comptimePrint("{d}", .{idx}),
                     .type = Type,
-                    .default_value = null,
+                    .default_value_ptr = null,
                     // TODO: is this the right thing to do?
                     .is_comptime = false,
                     .alignment = if (@sizeOf(Type) > 0) @alignOf(Type) else 0,
                 };
             }
 
-            return @Type(.{ .Struct = .{
+            return @Type(.{ .@"struct" = .{
                 .layout = .auto,
                 .fields = &fields,
                 .decls = &.{},

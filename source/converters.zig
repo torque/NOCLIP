@@ -21,16 +21,16 @@ pub fn DefaultConverter(comptime gen: ParameterGenerics) ?ConverterSignature(gen
     return if (comptime gen.multi)
         MultiConverter(gen)
     else switch (@typeInfo(gen.OutputType)) {
-        .Bool => FlagConverter(gen),
-        .Int => IntConverter(gen),
-        .Pointer => |info| if (info.size == .Slice and info.child == u8)
+        .bool => FlagConverter(gen),
+        .int => IntConverter(gen),
+        .pointer => |info| if (info.size == .slice and info.child == u8)
             StringConverter(gen)
         else
             null,
-        .Enum => |info| if (info.is_exhaustive) ChoiceConverter(gen) else null,
+        .@"enum" => |info| if (info.is_exhaustive) ChoiceConverter(gen) else null,
         // TODO: how to handle structs with field defaults? maybe this should only work
         // for tuples, which I don't think can have defaults.
-        .Struct => |info| if (gen.value_count == .fixed and gen.value_count.fixed == info.fields.len)
+        .@"struct" => |info| if (gen.value_count == .fixed and gen.value_count.fixed == info.fields.len)
             StructConverter(gen)
         else
             null,
@@ -102,7 +102,7 @@ fn IntConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
 
 fn StructConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
     const StructType = gen.OutputType;
-    const type_info = @typeInfo(StructType).Struct;
+    const type_info = @typeInfo(StructType).@"struct";
     const Intermediate = gen.IntermediateType();
 
     return struct {
@@ -120,7 +120,7 @@ fn StructConverter(comptime gen: ParameterGenerics) ConverterSignature(gen) {
                 const Converter = comptime DefaultConverter(
                     ncmeta.copyStruct(ParameterGenerics, gen, .{
                         .OutputType = field.type,
-                        .value_count = .{ .fixed = 1 },
+                        .value_count = @as(parameters.ValueCount, .{ .fixed = 1 }),
                     }),
                 ) orelse
                     @compileError("cannot get converter for field" ++ field.name);

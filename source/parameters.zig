@@ -48,11 +48,11 @@ pub const ParameterGenerics = struct {
     pub fn fixedValueCount(comptime OutputType: type, comptime value_count: ValueCount) ValueCount {
         return comptime if (value_count == .fixed)
             switch (@typeInfo(OutputType)) {
-                .Struct => |info| .{ .fixed = info.fields.len },
-                .Array => |info| .{ .fixed = info.len },
+                .@"struct" => |info| .{ .fixed = info.fields.len },
+                .array => |info| .{ .fixed = info.len },
                 // TODO: this is a bit sloppy, but it can be refined later.
                 // .Pointer covers slices, which may be a many-to-many conversion.
-                .Pointer => value_count,
+                .pointer => value_count,
                 else => .{ .fixed = 1 },
             }
         else

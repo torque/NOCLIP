@@ -57,7 +57,7 @@ pub fn StructuredPrinter(comptime Writer: type) type {
 
             // this assumes output stream has already had the first line properly
             // indented.
-            var splitter = std.mem.split(u8, text, "\n");
+            var splitter = std.mem.splitScalar(u8, text, '\n');
 
             var location: usize = indent;
             while (splitter.next()) |line| {
@@ -484,7 +484,7 @@ pub fn optInfo(comptime command: anytype) CommandHelp {
                 // than just the tag name. Roll our own eventually.
                 blk: {
                     switch (@typeInfo(@TypeOf(def))) {
-                        .Pointer => |info| if (info.size == .Slice and info.child == u8) {
+                        .pointer => |info| if (info.size == .Slice and info.child == u8) {
                             writer.print("{s}", .{def}) catch @compileError("no");
                             break :blk;
                         },

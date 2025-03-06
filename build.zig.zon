@@ -1,6 +1,8 @@
 .{
-    .name = "NOCLIP",
+    .name = .NOCLIP,
+    .fingerprint = 0xE4C223E8CB9C8ADF,
     .version = "0.1.0-pre",
+    .minimum_zig_version = "0.14.0",
     .dependencies = .{},
     .paths = .{
         "source",
