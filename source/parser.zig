@@ -6,6 +6,98 @@ pub fn Parser(comptime spec: type, comptime root: bool) type {
         locals: LocalParams,
         subcommands: Subcommands(spec, root),
 
+        const OptKeyVal = struct { []const u8, tokenizer.TokenContext.OptionContext };
+        const SubContext = struct { []const u8, *const tokenizer.TokenContext };
+        const OptAmalgam = struct { tokenizer.TokenContext.Options, []const OptKeyVal };
+
+        pub fn shortOptions(
+            globals: []const OptKeyVal,
+            level: tokenizer.TokenContext.NestLevel,
+        ) OptAmalgam {
+            comptime {
+                return if (@hasDecl(spec, "parameters")) blk: {
+                    var list: []const OptKeyVal = globals;
+                    var glob: []const OptKeyVal = globals;
+                    for (@typeInfo(spec.parameters).@"struct".decls) |decl| {
+                        const param = @field(spec.parameters, decl.name);
+                        for (param.shorts()) |short| {
+                            const okv = &[_]OptKeyVal{.{ short.opt, .{
+                                .global = if (short.scope == .global) level else .none,
+                                .value = short.value,
+                            } }};
+                            list = list ++ okv;
+                            if (short.scope == .global)
+                                glob = glob ++ okv;
+                        }
+                    }
+                    break :blk .{ .initComptime(list), glob };
+                } else .{ .initComptime(&.{}), &.{} };
+            }
+        }
+        pub fn longOptions(
+            globals: []const OptKeyVal,
+            level: tokenizer.TokenContext.NestLevel,
+        ) OptAmalgam {
+            comptime {
+                return if (@hasDecl(spec, "parameters")) blk: {
+                    var list: []const OptKeyVal = globals;
+                    var glob: []const OptKeyVal = globals;
+                    for (@typeInfo(spec.parameters).@"struct".decls) |decl| {
+                        const param = @field(spec.parameters, decl.name);
+                        for (param.longs()) |long| {
+                            const okv = &[_]OptKeyVal{.{ long.opt, .{
+                                .global = if (long.scope == .global) level else .none,
+                                .value = long.value,
+                            } }};
+                            list = list ++ okv;
+                            if (long.scope == .global)
+                                glob = glob ++ okv;
+                        }
+                    }
+                    break :blk .{ .initComptime(list), glob };
+                } else .{ .initComptime(&.{}), &.{} };
+            }
+        }
+
+        pub const tokenizerContext = if (root) rootTokenizerContext else subcommandTokenizerContext;
+
+        fn rootTokenizerContext() *const tokenizer.TokenContext {
+            comptime {
+                return subcommandTokenizerContext(.{}, .root);
+            }
+        }
+
+        fn subcommandTokenizerContext(
+            comptime globals: struct { short: []const OptKeyVal = &.{}, long: []const OptKeyVal = &.{} },
+            comptime level: tokenizer.TokenContext.NestLevel,
+        ) *const tokenizer.TokenContext {
+            comptime {
+                const short, const short_glob = shortOptions(globals.short, level);
+                const long, const long_glob = longOptions(globals.long, level);
+
+                const subcommands: tokenizer.TokenContext.Subcommands = if (@hasDecl(spec, "subcommands")) blk: {
+                    var subs: []const SubContext = &.{};
+                    for (@typeInfo(spec.subcommands).@"struct".decls) |decl| {
+                        subs = subs ++ &[_]SubContext{.{
+                            decl.name,
+                            Parser(@field(spec.subcommands, decl.name), false).tokenizerContext(
+                                .{ .short = short_glob, .long = long_glob },
+                                level.incr(),
+                            ),
+                        }};
+                    }
+                    break :blk .initComptime(subs);
+                } else .initComptime(&.{});
+
+                return &.{
+                    .short = short,
+                    .long = long,
+                    .positional = &.{},
+                    .subcommands = subcommands,
+                };
+            }
+        }
+
         pub fn init(alloc: std.mem.Allocator, context: ContextType(spec)) !Self {
             const arena = try alloc.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(alloc);
@@ -16,7 +108,7 @@ pub fn Parser(comptime spec: type, comptime root: bool) type {
                     .local = .{ .short = &.{}, .long = &.{}, .args = &.{} },
                 };
 
-                for (@typeInfo(@TypeOf(spec.parameters)).@"struct".decls) |dinf| {
+                for (@typeInfo(spec.parameters).@"struct".decls) |dinf| {
                     const decl = @field(@TypeOf(spec.parameters), dinf.name);
                     switch (@TypeOf(decl).param_type) {
                         .bool_group => {
@@ -85,7 +177,7 @@ pub fn Parser(comptime spec: type, comptime root: bool) type {
             pa.destroy(self.arena);
         }
 
-        pub fn parse(self: Self, args: []const [:0]const u8, env: std.process.EnvMap) noclip.Status(void) {
+        pub fn parse(self: Self, args: []const [:0]const u8, _: std.process.EnvMap) noclip.Status(void) {
             const alloc = self.arena.allocator();
             var argt = ArgTraveler.fromSlice(alloc, args) catch return .fail("out of memory");
             // pre-parse globals. globals can only be named, which simplifies things
@@ -197,30 +289,30 @@ pub fn Parser(comptime spec: type, comptime root: bool) type {
 
 pub fn Result(comptime spec: type) type {
     comptime {
-        var out: std.builtin.Type = .{
+        var fields: []const std.builtin.Type.StructField = &.{};
+
+        for (@typeInfo(spec.parameters).@"struct".decls) |df| {
+            const param = @field(spec.parameters, df.name);
+            if (@TypeOf(param).Result == void) continue;
+
+            const FType = ResultFieldType(param);
+            fields = fields ++ &[_]std.builtin.Type.StructField{.{
+                .name = df.name ++ "",
+                .type = FType,
+                .default_value_ptr = resultFieldDefault(param),
+                .is_comptime = false,
+                .alignment = @alignOf(FType),
+            }};
+        }
+
+        return @Type(.{
             .@"struct" = .{
                 .layout = .auto,
                 .fields = &.{},
                 .decls = &.{},
                 .is_tuple = false,
             },
-        };
-
-        for (@typeInfo(@TypeOf(spec.parameters)).@"struct".decls) |df| {
-            const param = @field(spec.parameters, df.name);
-            if (@TypeOf(param).Result == void) continue;
-
-            const FType = ResultFieldType(param);
-            out.@"struct".fields = out.@"struct".fields ++ &.{.{
-                .name = df.name ++ "",
-                .type = FType,
-                .default_value = resultFieldDefault(param),
-                .is_comptime = false,
-                .alignment = @alignOf(FType),
-            }};
-        }
-
-        return @Type(out);
+        });
     }
 }
 
@@ -228,7 +320,7 @@ pub fn defaultInit(comptime T: type) T {
     var result: T = undefined;
 
     for (@typeInfo(T).Struct.fields) |field| {
-        if (field.default_value) |def| {
+        if (field.default_value_ptr) |def| {
             @field(result, field.name) = @as(*const field.type, @ptrCast(@alignCast(def))).*;
         } else switch (@typeInfo(field.type)) {
             .@"struct" => @field(result, field.name) = defaultInit(field.type),
@@ -243,64 +335,54 @@ pub fn ResultFieldType(comptime param: anytype) type {
     if (param.mode() == .accumulate) {
         return param.Type();
     }
-    if (@typeInfo(param.Type()) == .optional) {
-        return if (param.default != null or param.required)
-            param.Type()
-        else
-            ?param.Type();
-    } else @compileError("you stepped in it now");
+    // if (@typeInfo(param.Type()) == .optional) {
+    return if (param.default != null or param.required)
+        param.Type()
+    else
+        ?param.Type();
+    // } else @compileError("you stepped in it now " ++ @typeName(param.Type()));
 }
 
 pub fn resultFieldDefault(comptime param: anytype) ?*anyopaque {
     if (param.mode() == .accumulate) {
         return &param.default;
     }
-    if (@typeInfo(param.Type()) == .optional) {
-        return if (param.default) |def|
-            &@as(param.Type(), def)
-        else
-            null;
-    } else @compileError("doom");
+    // if (@typeInfo(param.Type()) == .optional) {
+    return if (param.default) |def|
+        @constCast(&@as(param.Type(), def))
+    else
+        null;
+    // } else @compileError("doom");
 }
 
 pub fn Subcommands(comptime spec: type, comptime root: bool) type {
     comptime {
         if (!@hasDecl(spec, "subcommands")) return void;
-        const decls = @typeInfo(@TypeOf(spec.subcommands)).@"struct".decls;
+        const decls = @typeInfo(spec.subcommands).@"struct".decls;
         if (decls.len == 0) return void;
 
-        var out: std.builtin.Type = .{
-            .@"struct" = .{
-                .layout = .auto,
-                .fields = &.{},
-                .decls = &.{},
-                .is_tuple = false,
-            },
-        };
+        var fields: []const std.builtin.Type.StructField = &.{};
 
         for (decls) |dinf| {
-            const decl = @field(@TypeOf(spec.subcommands), dinf.name);
+            const decl = @field(spec.subcommands, dinf.name);
             const FType = Parser(decl, false);
-            out.@"struct".fields = out.@"struct".fields ++ &.{.{
-                .name = dinf.name + "",
+            fields = fields ++ &[_]std.builtin.Type.StructField{.{
+                .name = dinf.name ++ "",
                 .type = FType,
-                .default_value = null,
+                .default_value_ptr = null,
                 .is_comptime = false,
                 .alignment = @alignOf(FType),
             }};
         }
         if (root) {
-            // help: switch (spec.options.create_help_command) {
-            switch (spec.options.create_help_command) {
-                // .if_subcommands => if (out.@"struct".fields.len > 0) continue :help .always,
-                .if_subcommands,
-                .always,
-                => {
+            help: switch (spec.options.create_help_command) {
+                .if_subcommands => if (fields.len > 0) continue :help .always,
+                .always => {
                     const FType = Parser(HelpCommand(spec), false);
-                    out.@"struct".fields = out.@"struct".fields ++ &.{.{
+                    fields = fields ++ &[_]std.builtin.Type.StructField{.{
                         .name = "help",
                         .type = FType,
-                        .default_value = null,
+                        .default_value_ptr = null,
                         .is_comptime = false,
                         .alignment = @alignOf(FType),
                     }};
@@ -310,7 +392,14 @@ pub fn Subcommands(comptime spec: type, comptime root: bool) type {
             if (spec.options.create_completion_helper) {}
         }
 
-        return @Type(out);
+        return @Type(.{
+            .@"struct" = .{
+                .layout = .auto,
+                .fields = fields,
+                .decls = &.{},
+                .is_tuple = false,
+            },
+        });
     }
 }
 
@@ -558,3 +647,69 @@ fn setter(
 
 const std = @import("std");
 const noclip = @import("./noclip.zig");
+const tokenizer = @import("./tokenizer.zig");
+
+const Choice = enum { first, second };
+
+const Basic = struct {
+    pub const description = "A basic test";
+    pub const options: noclip.CommandOptions = .{
+        .create_help_command = .never,
+    };
+
+    pub const parameters = struct {
+        pub const choice: noclip.Option(Choice) = .{
+            .short = 'c',
+            .long = "choice",
+            .env = "NOCLIP_CHOICE",
+            .description = "enum choice option",
+        };
+        pub const default: noclip.Option(u32) = .{
+            .description = "default value integer option",
+            .short = 'd',
+            .long = "default",
+            .env = "NOCLIP_DEFAULT",
+            .default = 100,
+            .scope = .global,
+        };
+        pub const flag: noclip.BoolGroup = .{
+            .truthy = .{ .short = 'f', .long = "flag" },
+            .falsy = .{ .short = 'F', .long = "no-flag" },
+            .env = "NOCLIP_FLAG",
+            .description = "boolean flag",
+        };
+    };
+
+    pub const subcommands = struct {
+        pub const @"test" = struct {
+            pub const description = "a nested test";
+            pub const options: noclip.CommandOptions = .{};
+            pub const parameters = struct {
+                pub const flag: noclip.BoolGroup = .{
+                    .truthy = .{ .short = 'f', .long = "flag" },
+                    .falsy = .{ .short = 'F', .long = "no-flag" },
+                    .env = "NOCLIP_FLAG",
+                    .description = "boolean flag",
+                };
+            };
+        };
+    };
+};
+
+test "hmm" {
+    const P = Parser(Basic, true);
+
+    const tc = comptime P.tokenizerContext();
+    for (tc.short.keys()) |key| {
+        std.debug.print("short: {s}\n", .{key});
+    }
+    for (tc.long.keys()) |key| {
+        std.debug.print("long: {s}\n", .{key});
+    }
+    for (tc.subcommands.keys()) |key| {
+        std.debug.print("subcommand: {s}\n", .{key});
+        for (tc.subcommands.get(key).?.short.keys()) |skey| {
+            std.debug.print("short: {s}\n", .{skey});
+        }
+    }
+}

@@ -40,8 +40,6 @@ pub const String = struct {
     bytes: []const u8,
 };
 
-pub const Codepoint = u21;
-
 pub const ParameterType = enum {
     bool_group,
     constant,
@@ -84,19 +82,9 @@ pub fn Count(comptime T: type) type {
     };
 }
 
+pub const OptScope = struct { opt: []const u8, scope: Scope, value: bool };
+
 pub const BoolGroup = struct {
-    pub const Result = bool;
-    pub const param_type: ParameterType = .bool_group;
-    pub const multi_mode: MultiMode = .last;
-
-    // accessors to easily read decls from an instance
-    pub fn Type(comptime _: *const BoolGroup) type {
-        return BoolGroup.Result;
-    }
-    pub fn mode(comptime _: *const BoolGroup) MultiMode {
-        return BoolGroup.multi_mode;
-    }
-
     description: []const u8 = "",
     truthy: Pair = .{},
     falsy: Pair = .{},
@@ -116,10 +104,44 @@ pub const BoolGroup = struct {
     eager: bool = false,
     hidden: bool = false,
 
+    pub const Result = bool;
+    pub const param_type: ParameterType = .bool_group;
+    pub const multi_mode: MultiMode = .last;
+
+    // accessors to easily read decls from an instance
+    pub fn Type(comptime _: *const BoolGroup) type {
+        return BoolGroup.Result;
+    }
+    pub fn mode(comptime _: *const BoolGroup) MultiMode {
+        return BoolGroup.multi_mode;
+    }
+
+    pub fn shorts(comptime self: BoolGroup) []const OptScope {
+        comptime {
+            var list: []const OptScope = &.{};
+            if (self.truthy.short) |short|
+                list = list ++ &[_]OptScope{.{ .opt = mem.encodeShort(short), .scope = self.scope, .value = false }};
+            if (self.falsy.short) |short|
+                list = list ++ &[_]OptScope{.{ .opt = mem.encodeShort(short), .scope = self.scope, .value = false }};
+            return list;
+        }
+    }
+
+    pub fn longs(comptime self: BoolGroup) []const OptScope {
+        comptime {
+            var list: []const OptScope = &.{};
+            if (self.truthy.long) |long|
+                list = list ++ &[_]OptScope{.{ .opt = long, .scope = self.scope, .value = false }};
+            if (self.falsy.long) |long|
+                list = list ++ &[_]OptScope{.{ .opt = long, .scope = self.scope, .value = false }};
+            return list;
+        }
+    }
+
     pub const Pair = struct {
         /// a single unicode codepoint that identifies this flag on the command
         /// line, e.g. 'v'.
-        short: ?Codepoint = null,
+        short: ?mem.Codepoint = null,
         /// a string, beginning with the long flag sequence `--` that identifies
         /// this flag on the command line, e.g. "--version". Multiple words
         /// should be skewercase, i.e. "--multiple-words".
@@ -131,6 +153,19 @@ pub const BoolGroup = struct {
 // value, e.g. an int. for like -9 on gz. A flag is just a FixedValue with
 pub fn Constant(comptime R: type) type {
     return struct {
+        description: []const u8 = "",
+        short: ?mem.Codepoint = null,
+        long: ?[]const u8 = null,
+        env: ?[]const u8 = null,
+        /// Require that the user always provide a value for this option on the
+        /// command line.
+        required: bool = false,
+        /// The value associated with this flag
+        value: Result,
+        scope: Scope = .local,
+        eager: bool = false,
+        hidden: bool = false,
+
         const Self = @This();
         pub const Result = ScryResultType(R);
         pub const param_type: ParameterType = .constant;
@@ -144,23 +179,37 @@ pub fn Constant(comptime R: type) type {
             return Self.multi_mode;
         }
 
+        pub fn shorts(comptime self: Self) []const OptScope {
+            comptime return if (self.short) |short|
+                &[_]OptScope{.{ .opt = mem.encodeShort(short), .scope = self.scope, .value = true }}
+            else
+                &.{};
+        }
+
+        pub fn longs(comptime self: Self) []const OptScope {
+            comptime return if (self.long) |long|
+                &[_]OptScope{.{ .opt = long, .scope = self.scope, .value = true }}
+            else
+                &.{};
+        }
+    };
+}
+
+pub fn Counter(comptime R: type) type {
+    return struct {
         description: []const u8 = "",
-        short: ?Codepoint = null,
+        short: ?mem.Codepoint = null,
         long: ?[]const u8 = null,
         env: ?[]const u8 = null,
         /// Require that the user always provide a value for this option on the
         /// command line.
         required: bool = false,
         /// The value associated with this flag
-        value: Result,
+        increment: Result = 1,
         scope: Scope = .local,
         eager: bool = false,
         hidden: bool = false,
-    };
-}
 
-pub fn Counter(comptime R: type) type {
-    return struct {
         const Self = @This();
         pub const Result = ScryResultType(R);
         pub const param_type: ParameterType = .counter;
@@ -174,38 +223,26 @@ pub fn Counter(comptime R: type) type {
             return Self.multi_mode;
         }
 
-        description: []const u8 = "",
-        short: ?Codepoint = null,
-        long: ?[]const u8 = null,
-        env: ?[]const u8 = null,
-        /// Require that the user always provide a value for this option on the
-        /// command line.
-        required: bool = false,
-        /// The value associated with this flag
-        increment: Result = 1,
-        scope: Scope = .local,
-        eager: bool = false,
-        hidden: bool = false,
+        pub fn shorts(comptime self: Self) []const OptScope {
+            comptime return if (self.short) |short|
+                &[_]OptScope{.{ .opt = mem.encodeShort(short), .scope = self.scope, .value = true }}
+            else
+                &.{};
+        }
+
+        pub fn longs(comptime self: Self) []const OptScope {
+            comptime return if (self.long) |long|
+                &[_]OptScope{.{ .opt = long, .scope = self.scope, .value = true }}
+            else
+                &.{};
+        }
     };
 }
 
 pub fn Option(comptime R: type) type {
     return struct {
-        const Self = @This();
-        pub const Result = ScryResultType(R);
-        pub const param_type: ParameterType = .option;
-        pub const multi_mode: MultiMode = scryMode(R);
-
-        // accessors to easily read decls from an instance
-        pub fn Type(comptime _: *const Self) type {
-            return Self.Result;
-        }
-        pub fn mode(comptime _: *const Self) MultiMode {
-            return Self.multi_mode;
-        }
-
         description: []const u8 = "",
-        short: ?Codepoint = null,
+        short: ?mem.Codepoint = null,
         long: ?[]const u8 = null,
         env: ?[]const u8 = null,
         /// Require that the user always provide a value for this option on the
@@ -221,11 +258,40 @@ pub fn Option(comptime R: type) type {
         scope: Scope = .local,
         eager: bool = false,
         hidden: bool = false,
+
+        const Self = @This();
+        pub const Result = ScryResultType(R);
+        pub const param_type: ParameterType = .option;
+        pub const multi_mode: MultiMode = scryMode(R);
+
+        // accessors to easily read decls from an instance
+        pub fn Type(comptime _: *const Self) type {
+            return Self.Result;
+        }
+        pub fn mode(comptime _: *const Self) MultiMode {
+            return Self.multi_mode;
+        }
+
+        pub fn shorts(comptime self: Self) []const OptScope {
+            comptime return if (self.short) |short|
+                &[_]OptScope{.{ .opt = mem.encodeShort(short), .scope = self.scope, .value = true }}
+            else
+                &.{};
+        }
+
+        pub fn longs(comptime self: Self) []const OptScope {
+            comptime return if (self.long) |long|
+                &[_]OptScope{.{ .opt = long, .scope = self.scope, .value = true }}
+            else
+                &.{};
+        }
     };
 }
 
 pub fn Argument(comptime R: type) type {
     return struct {
+        description: []const u8 = "",
+
         const Self = @This();
         pub const Result = ScryResultType(R);
         pub const param_type: ParameterType = .argument;
@@ -239,12 +305,26 @@ pub fn Argument(comptime R: type) type {
             return Self.multi_mode;
         }
 
-        description: []const u8 = "",
+        pub fn shorts(_: Self) []const OptScope {
+            return &.{};
+        }
+
+        pub fn longs(_: Self) []const OptScope {
+            return &.{};
+        }
     };
 }
 
 pub fn Group(comptime R: type) type {
     return struct {
+        description: []const u8 = "",
+        env: ?[]const u8 = null,
+        /// at least one of the parameters in the group must be provided
+        required: bool = false,
+        // if set, overrides the scope of all parameters
+        scope: ?Scope = null,
+        parameters: type,
+
         const Self = @This();
         pub const Result = ScryResultType(R);
         pub const multi_mode: MultiMode = scryMode(R);
@@ -258,11 +338,37 @@ pub fn Group(comptime R: type) type {
             return Self.multi_mode;
         }
 
-        description: []const u8 = "",
-        env: ?[]const u8 = null,
-        /// at least one of the parameters in the group must be provided
-        required: bool = false,
-        parameters: type,
+        pub fn shorts(comptime self: Self) []const OptScope {
+            comptime {
+                var list: []const OptScope = &.{};
+                for (@typeInfo(self.parameters).@"struct".decls) |decl| {
+                    const param = @field(self.parameters, decl.name);
+                    if (self.scope) |scope| {
+                        for (param.shorts()) |short|
+                            list = list ++ &[_]OptScope{.{ .opt = short.opt, .scope = scope, .value = short.value }};
+                    } else {
+                        list = list ++ param.shorts();
+                    }
+                }
+                return list;
+            }
+        }
+
+        pub fn longs(comptime self: Self) []const OptScope {
+            comptime {
+                var list: []const OptScope = &.{};
+                for (@typeInfo(self.parameters).@"struct".decls) |decl| {
+                    const param = @field(self.parameters, decl.name);
+                    if (self.scope) |scope| {
+                        for (param.longs()) |long|
+                            list = list ++ &[_]OptScope{.{ .opt = long.opt, .scope = scope, .value = long.value }};
+                    } else {
+                        list = list ++ param.longs();
+                    }
+                }
+                return list;
+            }
+        }
 
         pub fn validate(self: @This()) Status(void) {
             comptime {
@@ -276,7 +382,9 @@ pub fn Group(comptime R: type) type {
 }
 
 fn hasCanary(comptime T: type) bool {
-    return @hasDecl(T, "__noclip_canary__") and T.__noclip_canary__ == __Canary;
+    return @typeInfo(T) == .@"struct" and
+        @hasDecl(T, "__noclip_canary__") and
+        T.__noclip_canary__ == __Canary;
 }
 
 pub fn scryMode(comptime T: type) MultiMode {
@@ -352,4 +460,5 @@ pub fn ReturnType(comptime spec: type) type {
 }
 
 pub const Parser = @import("./parser.zig");
+pub const mem = @import("./mem.zig");
 const std = @import("std");

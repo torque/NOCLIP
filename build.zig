@@ -4,21 +4,19 @@ pub fn build(b: *std.Build) void {
     const target: std.Build.ResolvedTarget = b.standardTargetOptions(.{});
     const optimize: std.builtin.Mode = b.standardOptimizeOption(.{});
 
-    const noclip = b.addModule("noclip", .{
-        .root_source_file = b.path("source/noclip.zig"),
-    });
 
-    demo(b, noclip, target, optimize);
 
     const test_step = b.step("test", "Run unit tests");
     const tests = b.addTest(.{
         .name = "tests",
-        .root_source_file = b.path("source/noclip.zig"),
+        .root_source_file = b.path("source/parser.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    test_step.dependOn(&tests.step);
+    const run_main_tests = b.addRunArtifact(tests);
+    test_step.dependOn(&b.addInstallArtifact(tests, .{}).step);
+    test_step.dependOn(&run_main_tests.step);
 }
 
 fn demo(
